@@ -7,6 +7,9 @@ GIMP AI Plugin - Simplified version to fix crash
 
 VERSION = "0.14.0"
 
+# Most layers the edits endpoint accepts in one call
+MAX_COMPOSITE_LAYERS = 16
+
 import sys
 import os
 import gi
@@ -721,11 +724,19 @@ class GimpAIPlugin(Gimp.PlugIn):
                 )
                 return None
 
-            if len(visible_layers) > 16:
+            if len(visible_layers) > MAX_COMPOSITE_LAYERS:
+                dropped = len(visible_layers) - MAX_COMPOSITE_LAYERS
                 print(
-                    f"DEBUG: Too many visible layers ({len(visible_layers)}), will use first 16"
+                    f"DEBUG: Too many visible layers ({len(visible_layers)}), "
+                    f"will use first {MAX_COMPOSITE_LAYERS}"
                 )
-                visible_layers = visible_layers[:16]
+                Gimp.message(
+                    f"⚠️ Layer Composite accepts {MAX_COMPOSITE_LAYERS} layers at most.\n\n"
+                    f"{len(visible_layers)} layers are visible, so the bottom "
+                    f"{dropped} will be ignored.\n\n"
+                    "Hide the layers you do not want included to choose which are used."
+                )
+                visible_layers = visible_layers[:MAX_COMPOSITE_LAYERS]
 
             # Create dialog using helper methods
             dialog = self._create_dialog_base("Layer Composite")
@@ -2749,8 +2760,12 @@ class GimpAIPlugin(Gimp.PlugIn):
                         "Error: At least 2 images required for composite mode",
                         None,
                     )
-                if len(image_data) > 16:
-                    return False, "Error: Maximum 16 layers supported", None
+                if len(image_data) > MAX_COMPOSITE_LAYERS:
+                    return (
+                        False,
+                        f"Error: Maximum {MAX_COMPOSITE_LAYERS} layers supported",
+                        None,
+                    )
             else:
                 print("DEBUG: Single image mode")
                 if not mask_data:
@@ -3420,6 +3435,7 @@ class GimpAIPlugin(Gimp.PlugIn):
             "gimp-ai-inpaint",
             "gimp-ai-layer-generator",
             "gimp-ai-layer-composite",
+            "gimp-ai-settings",
         ]
 
     def do_create_procedure(self, name):
@@ -3444,6 +3460,14 @@ class GimpAIPlugin(Gimp.PlugIn):
                 self, name, Gimp.PDBProcType.PLUGIN, self.run_layer_composite, None
             )
             procedure.set_menu_label("Layer Composite")
+            procedure.add_menu_path("<Image>/Filters/AI/")
+            return procedure
+
+        elif name == "gimp-ai-settings":
+            procedure = Gimp.ImageProcedure.new(
+                self, name, Gimp.PDBProcType.PLUGIN, self.run_settings, None
+            )
+            procedure.set_menu_label("Settings")
             procedure.add_menu_path("<Image>/Filters/AI/")
             return procedure
 
@@ -3926,178 +3950,6 @@ class GimpAIPlugin(Gimp.PlugIn):
             print(f"DEBUG: Failed to create image from data: {e}")
             return None
 
-    def _generate_gpt_image_layer_threaded(
-        self, image, prompt, api_key, size="auto", progress_label=None
-    ):
-        """Threaded wrapper for GPT image generation to keep UI responsive"""
-        import threading
-        import time
-
-        print("DEBUG: Starting threaded GPT-Image-1 generation...")
-
-        # Shared storage for results
-        result = {"success": False, "completed": False}
-
-        def generation_thread():
-            try:
-                # Call the blocking API directly with progress updates
-                import json
-                import urllib.request
-                import ssl
-
-                # Determine optimal size based on image dimensions or user preference
-                if size == "auto":
-                    img_width = image.get_width()
-                    img_height = image.get_height()
-                    aspect_ratio = img_width / img_height
-
-                    if aspect_ratio > 1.2:  # Landscape
-                        optimal_size = "1536x1024"
-                    elif aspect_ratio < 0.83:  # Portrait
-                        optimal_size = "1024x1536"
-                    else:  # Square or close to square
-                        optimal_size = "1024x1024"
-                else:
-                    optimal_size = size
-
-                print(f"DEBUG: [THREAD] Using size {optimal_size} for generation")
-
-                # Prepare the request data
-                data = {
-                    "model": "gpt-image-1",
-                    "prompt": prompt,
-                    "n": 1,
-                    "size": optimal_size,
-                    "quality": "high",
-                }
-
-                # Create the request
-                json_data = json.dumps(data).encode("utf-8")
-                url = "https://api.openai.com/v1/images/generations"
-                req = urllib.request.Request(url, data=json_data)
-                req.add_header("Content-Type", "application/json")
-                req.add_header("Authorization", f"Bearer {api_key}")
-
-                print("DEBUG: [THREAD] Sending GPT-Image-1 generation request...")
-                if progress_label:
-                    update_progress = self._create_progress_callback(progress_label)
-                    update_progress("🚀 Sending request to GPT-Image-1...")
-
-                # Send request
-                with urllib.request.urlopen(req) as response:
-                    response_data = response.read().decode("utf-8")
-
-                # Parse response
-                response_json = json.loads(response_data)
-                print("DEBUG: [THREAD] GPT-Image-1 API response received")
-
-                if progress_label:
-                    update_progress("✅ Processing AI response...")
-
-                # Process the response
-                if "data" in response_json and len(response_json["data"]) > 0:
-                    result_data = response_json["data"][0]
-
-                    if "b64_json" in result_data:
-                        print(
-                            "DEBUG: [THREAD] Processing base64 image data from GPT-Image-1"
-                        )
-                        import base64
-
-                        image_data = base64.b64decode(result_data["b64_json"])
-                        print(
-                            f"DEBUG: [THREAD] Decoded {len(image_data)} bytes of image data"
-                        )
-
-                        # Create layer on main thread via GLib.idle_add
-                        layer_created = {"success": False}
-
-                        def create_layer():
-                            try:
-                                success = self._add_layer_from_data(image, image_data)
-                                layer_created["success"] = success
-                                return False
-                            except Exception as e:
-                                print(f"ERROR: [MAIN] Failed to create layer: {e}")
-                                layer_created["success"] = False
-                                return False
-
-                        GLib.idle_add(create_layer)
-
-                        # Wait for layer creation to complete
-                        import time
-
-                        while "success" not in layer_created:
-                            time.sleep(0.01)
-
-                        result["success"] = layer_created["success"]
-                    else:
-                        print("ERROR: [THREAD] No b64_json in GPT-Image-1 response")
-                        result["success"] = False
-                else:
-                    print("ERROR: [THREAD] No data in GPT-Image-1 response")
-                    result["success"] = False
-
-            except Exception as e:
-                print(f"ERROR: [THREAD] Image generation failed: {e}")
-                result["success"] = False
-            finally:
-                result["completed"] = True
-
-        # Start thread
-        thread = threading.Thread(target=generation_thread)
-        thread.daemon = True
-        thread.start()
-
-        # Keep UI responsive while waiting
-        max_wait_time = 400  # 6.7 minutes maximum wait (longer for image generation)
-        start_time = time.time()
-        last_update_time = start_time
-
-        while not result["completed"]:
-            current_time = time.time()
-            elapsed = current_time - start_time
-
-            # Update progress every 10 seconds
-            if progress_label and current_time - last_update_time > 10:
-                minutes = int(elapsed // 60)
-                if minutes > 0:
-                    self._update_progress(
-                        progress_label, f"🎨 Still generating... ({minutes}m elapsed)"
-                    )
-                else:
-                    self._update_progress(progress_label, "🎨 Generating image...")
-                last_update_time = current_time
-
-            # Check for cancellation
-            if self._check_cancel_and_process_events():
-                print("DEBUG: Image generation cancelled by user")
-                if progress_label:
-                    self._update_progress(
-                        progress_label, "❌ Generation cancelled by user"
-                    )
-                result["success"] = False
-                break
-
-            # Check for timeout
-            if elapsed > max_wait_time:
-                print(
-                    f"DEBUG: Image generation thread timeout after {max_wait_time} seconds"
-                )
-                if progress_label:
-                    self._update_progress(progress_label, "❌ Generation timed out")
-                result["success"] = False
-                break
-
-            # Small sleep to prevent CPU spinning
-            time.sleep(0.1)
-
-        # Thread completed, return results
-        print(
-            f"DEBUG: Threaded image generation completed: success={result['success']}"
-        )
-        return result["success"]
-
     def _add_layer_from_data(self, image, image_data):
         """Add image from raw data as a new layer"""
         try:
@@ -4112,6 +3964,21 @@ class GimpAIPlugin(Gimp.PlugIn):
                 temp_file_path = temp_file.name
 
             print(f"DEBUG: Saved image data to: {temp_file_path}")
+
+            # Keep a copy when debug mode is on, as the edit path does. The
+            # temp file below is always removed, so without this there is no
+            # way to inspect what the API actually returned.
+            if self._is_debug_mode():
+                debug_filename = os.path.join(
+                    tempfile.gettempdir(),
+                    f"gimp-ai_generated_{len(image_data)}_bytes.png",
+                )
+                try:
+                    with open(debug_filename, "wb") as debug_file:
+                        debug_file.write(image_data)
+                    print(f"DEBUG: Saved generated image to {debug_filename}")
+                except Exception as e:
+                    print(f"DEBUG: Could not save debug file: {e}")
 
             try:
                 # Load the image as a new layer
@@ -4284,17 +4151,18 @@ class GimpAIPlugin(Gimp.PlugIn):
                 dialog.destroy()
 
     def run_settings(self, procedure, run_mode, image, drawables, config, run_data):
-        print("DEBUG: Testing HTTP functionality...")
+        """Open the settings dialog from the Filters > AI menu"""
+        print("DEBUG: Settings called from menu")
 
-        # Test HTTP request
-        success, message = self._test_http_request()
-
-        if success:
-            Gimp.message(f"✅ {message}")
-            print(f"DEBUG: HTTP test succeeded: {message}")
-        else:
-            Gimp.message(f"❌ {message}")
-            print(f"DEBUG: HTTP test failed: {message}")
+        try:
+            self._init_gimp_ui()
+            self._show_settings_dialog(None)
+        except Exception as e:
+            print(f"ERROR: Settings dialog failed: {e}")
+            Gimp.message(f"❌ Could not open settings: {e}")
+            return procedure.new_return_values(
+                Gimp.PDBStatusType.EXECUTION_ERROR, GLib.Error()
+            )
 
         return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
 

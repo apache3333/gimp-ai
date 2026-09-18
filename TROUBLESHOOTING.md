@@ -55,6 +55,26 @@ Common issues and solutions for the GIMP AI Plugin.
 - Use matching directory (3.0 vs 3.1)
 - Install in correct version-specific folder
 
+### No DEBUG Output in the Error Console (Windows)
+
+**Symptoms**: The Error Console shows almost nothing, even during a successful run
+
+**This is expected on Windows.** The plugin's `DEBUG:` lines go to standard output, and a
+GUI application on Windows has no console attached, so they are discarded. GIMP's Error
+Console only shows messages the plugin sends explicitly.
+
+**To inspect what the plugin is doing on Windows:**
+
+1. Open `Filters` → `AI` → `Settings`
+2. Tick **Save debug images**
+3. Run the feature again
+
+The images sent to and returned from the API are written to your temp folder
+(`%TEMP%`), which is usually more useful than the log text anyway. On macOS and Linux,
+start GIMP from a terminal to see the `DEBUG:` lines directly.
+
+---
+
 ### Missing coordinate_utils.py File
 
 **Symptoms**: Plugin appears but crashes when used, or error about missing module

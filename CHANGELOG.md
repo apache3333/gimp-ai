@@ -5,6 +5,29 @@ All notable changes to the GIMP AI Plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`Filters > AI > Settings` now exists.** README and INSTALL.md both described this menu
+  entry but it was never registered, so settings could only be reached from a button inside
+  another dialog. Its handler also called a `_test_http_request` method that does not exist
+  in the class, so the entry would have failed had it been reachable.
+- **Layer Composite no longer drops layers silently.** With more than 16 visible layers the
+  extras were discarded with only a debug print, which is invisible on Windows. It now says
+  how many are being ignored and how to choose which.
+- **Image generation honours the debug images setting.** The generation path always deleted
+  its temporary file, so there was no way to inspect what the API returned, unlike the
+  inpainting path.
+
+### Removed
+
+- `_generate_gpt_image_layer_threaded`, 172 lines that nothing called. It held a second copy
+  of the generation request that bypassed the SSL fallback in `_make_url_request` and used
+  different aspect ratio thresholds from the live path.
+
+---
+
 ## [0.8.0-beta] - 2024-10-04
 
 ### 🎉 Initial Beta Release
