@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Venice.ai provider (experimental)**: select it in Settings, with a `VENICE_API_KEY`
+  environment variable fallback. Generation uses Venice's OpenAI-compatible
+  `/images/generations`; inpainting uses `/image/edit`; layer composite uses
+  `/image/multi-edit`, respecting the model's input image limit. Generation and edit
+  models are user-selectable and the list can be refreshed live from Venice.
+  - **Venice has no mask parameter** on any endpoint, so the model is not told which
+    region to change. The selection is still applied as a GIMP layer mask afterwards, so
+    the visible result stays inside your selection. Venice also marks its edit endpoints
+    experimental.
 - **New required file**: `ai_providers.py` must be installed alongside `gimp-ai-plugin.py`
   and `coordinate_utils.py`. The automated installer and release package handle this; manual
   installs now copy three files instead of two.

@@ -2,7 +2,8 @@
 
 A Python plugin for GIMP 3.0.4+ that integrates AI image generation capabilities directly into GIMP. This is a **beta release** seeking testers on all platforms.
 
-Currently supports **OpenAI's gpt-image-1** models for inpainting and image generation. Future plans include support for additional AI providers.
+Supports **OpenAI's gpt-image-1** for inpainting and image generation, plus
+**experimental [Venice.ai](https://venice.ai) support** with a choice of models.
 
 ## ✨ Features
 
@@ -15,7 +16,7 @@ Currently supports **OpenAI's gpt-image-1** models for inpainting and image gene
 
 - **GIMP 3.0.4 or newer** (all GIMP 3.X versions from 3.0.4 onwards)
 - **Internet connection** for AI API calls
-- **OpenAI API key** (get one at [platform.openai.com](https://platform.openai.com))
+- **An API key** from [OpenAI](https://platform.openai.com) or, experimentally, [Venice.ai](https://venice.ai)
 - **Zero external dependencies** - uses only Python standard library + GIMP APIs
 
 ## 🚀 Installation
@@ -77,12 +78,31 @@ plug-ins/
 
 ## ⚙️ Configuration
 
-1. **Get an OpenAI API key** from [platform.openai.com](https://platform.openai.com)
-2. In GIMP: go to `Filters → AI → Settings`
-3. **Paste your API key** (starts with `sk-`)
-4. Click OK - it's saved automatically!
+1. **Get an API key** from [platform.openai.com](https://platform.openai.com) (or [venice.ai](https://venice.ai))
+2. In GIMP: open any `Filters → AI` tool and click **Settings**
+3. **Choose your provider**, then **paste your API key**
+4. Click Save - it's stored in GIMP's preferences automatically!
+
+You can also supply the key through the `OPENAI_API_KEY` or `VENICE_API_KEY`
+environment variable instead of saving it.
 
 > **First time?** See [INSTALL.md](INSTALL.md) for detailed API key instructions.
+
+### 🧪 Venice.ai (experimental)
+
+Venice is a second provider you can select in Settings. Generation works the same as
+OpenAI. Editing has two differences worth knowing before you rely on it:
+
+- **No mask support.** Venice's API has no mask parameter of any kind, so it cannot be
+  told *which* part of the image to change. The plugin still masks the result to your
+  selection with a GIMP layer mask, so you only see changes inside your selection - but
+  the model may have redrawn more of the surrounding area than OpenAI would.
+- **Sizing is approximate.** Venice sizes output by aspect ratio and a resolution tier
+  rather than exact pixels, so results are scaled to fit before being composited.
+
+Venice's own documentation marks its edit endpoints as experimental, and so do we. Pick
+your generation and edit models in Settings - the model list can be refreshed live from
+Venice, and you can type any model id Venice adds later.
 
 ## 🎨 Usage
 

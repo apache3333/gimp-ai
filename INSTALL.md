@@ -11,7 +11,7 @@ This guide will walk you through installing the GIMP AI Plugin, even if you've n
 Before starting, make sure you have:
 
 1. ✅ **GIMP 3.0.4 or newer** installed (download from [gimp.org](https://www.gimp.org))
-2. ✅ **An OpenAI API key** (get one at [platform.openai.com](https://platform.openai.com))
+2. ✅ **An API key** from [platform.openai.com](https://platform.openai.com), or a [Venice.ai](https://venice.ai) key for the experimental Venice provider
 3. ✅ **Internet connection** for downloading files and using AI features
 
 > **Important**: This plugin requires **GIMP 3.0.4 or newer**. Earlier versions are not compatible. The automated installer will detect all compatible GIMP versions and let you choose which to install to.
@@ -257,9 +257,10 @@ If GIMP is currently running:
 
 ## 🔑 Step 7: Configure Your API Key
 
-Now you'll set up your OpenAI API key so the plugin can access AI features.
+Now you'll set up an API key so the plugin can access AI features. Pick one provider -
+OpenAI, or Venice.ai if you want to try the experimental provider.
 
-### Get Your API Key
+### Get an OpenAI API Key
 
 1. Go to [platform.openai.com](https://platform.openai.com)
 2. Sign up or log in
@@ -270,23 +271,34 @@ Now you'll set up your OpenAI API key so the plugin can access AI features.
 
 > **Note**: You'll need to add credits to your OpenAI account to use the API. Check pricing at [openai.com/pricing](https://openai.com/pricing).
 
+### Or Get a Venice.ai API Key (experimental)
+
+1. Go to [venice.ai](https://venice.ai) and log in
+2. Open the API settings and create a key
+3. **Copy and save it** - as with OpenAI, you only see it once
+
+An **inference key is all you need**. The plugin never calls Venice's account, billing or
+key-management endpoints. It does read Venice's model catalogue to populate the model
+dropdowns, but that endpoint is public and the plugin sends no key with it.
+
 ### Enter Your API Key in GIMP
 
-**Method 1 (Recommended):**
+1. In GIMP, open any AI feature (e.g., `Filters` → `AI` → `Image Generator`)
+2. Click the **Settings** button in the dialog
+3. Choose your **AI Provider**
+4. Paste your API key and click **Save**
 
-1. In GIMP, go to `Filters` → `AI` → `Settings`
-2. Paste your API key in the "OpenAI API Key" field
-3. Click OK
+If no key is configured yet, the dialog shows a warning bar with a **Configure Now**
+button that takes you straight to the same place.
 
-**Method 2 (If Settings menu isn't available):**
+The plugin will **automatically save** your API key in GIMP's preferences - you only need
+to enter it once.
 
-1. Try any AI feature (e.g., `Filters` → `AI` → `Image Generator`)
-2. You'll see an error dialog about missing API key
-3. Click "Configure" in the error dialog
-4. Paste your API key
-5. Click OK
+### Or Use an Environment Variable
 
-The plugin will **automatically save** your API key in GIMP's preferences - you only need to enter it once!
+If you would rather not store the key in GIMP's preferences, set `OPENAI_API_KEY` or
+`VENICE_API_KEY` in the environment GIMP runs in. The plugin checks the config first,
+then falls back to the environment variable.
 
 ---
 
@@ -332,7 +344,7 @@ Let's verify everything is working:
 ### "No API Key Configured" Error
 
 1. Make sure you've entered your API key (Step 7)
-2. The key should start with `sk-`
+2. OpenAI keys start with `sk-`; check you pasted the whole key
 3. Check for extra spaces when copying/pasting
 4. Try removing and re-entering the key
 

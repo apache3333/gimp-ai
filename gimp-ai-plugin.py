@@ -40,7 +40,7 @@ from coordinate_utils import (
 )
 
 # Import provider abstraction (pure Python, no GIMP dependencies)
-from ai_providers import get_provider, ProviderError
+from ai_providers import get_provider, PROVIDERS, ProviderError
 
 
 class GimpAIPlugin(Gimp.PlugIn):
@@ -50,6 +50,8 @@ class GimpAIPlugin(Gimp.PlugIn):
         super().__init__()
         self.config = self._load_config()
         self._cancel_requested = False
+        # Populated by the settings dialog when it refreshes Venice's catalogue
+        self._venice_model_limits = {}
 
     def _load_config(self):
         """Load configuration from various locations"""
@@ -220,7 +222,7 @@ class GimpAIPlugin(Gimp.PlugIn):
 
     def _get_api_key(self):
         """Get the configured provider's API key from config or environment"""
-        return self._get_provider().get_api_key(self.config, os.environ)
+        return self._get_provider().get_api_key(os.environ)
 
     def _get_processing_mode(self, dialog_mode=None):
         """Determine processing mode based on dialog selection or fallback to config"""
@@ -994,9 +996,36 @@ class GimpAIPlugin(Gimp.PlugIn):
             content_area.set_margin_top(20)
             content_area.set_margin_bottom(20)
 
-            # API Key section
+            # Provider selection
             provider = self._get_provider()
-            api_frame = Gtk.Frame(label=f"{provider.label} API Configuration")
+            provider_names = list(PROVIDERS.keys())
+
+            provider_frame = Gtk.Frame(label="AI Provider")
+            provider_box = Gtk.VBox(spacing=10)
+            provider_box.set_margin_start(10)
+            provider_box.set_margin_end(10)
+            provider_box.set_margin_top(10)
+            provider_box.set_margin_bottom(10)
+
+            provider_combo = Gtk.ComboBoxText()
+            for name in provider_names:
+                candidate = PROVIDERS[name](self.config)
+                suffix = " (experimental)" if candidate.experimental else ""
+                provider_combo.append_text(f"{candidate.label}{suffix}")
+            provider_combo.set_active(provider_names.index(provider.name))
+            provider_box.pack_start(provider_combo, False, False, 0)
+
+            provider_note = Gtk.Label()
+            provider_note.set_halign(Gtk.Align.START)
+            provider_note.set_line_wrap(True)
+            provider_note.get_style_context().add_class("dim-label")
+            provider_box.pack_start(provider_note, False, False, 0)
+
+            provider_frame.add(provider_box)
+            content_area.pack_start(provider_frame, False, False, 0)
+
+            # API Key section
+            api_frame = Gtk.Frame(label="API Configuration")
             api_box = Gtk.VBox(spacing=10)
             api_box.set_margin_start(10)
             api_box.set_margin_end(10)
@@ -1004,13 +1033,8 @@ class GimpAIPlugin(Gimp.PlugIn):
             api_box.set_margin_bottom(10)
 
             # Current API key status
-            current_key = self.config.get(provider.name, {}).get("api_key")
-            if current_key:
-                status_label = Gtk.Label(label="✓ API key is configured")
-                status_label.set_halign(Gtk.Align.START)
-            else:
-                status_label = Gtk.Label(label="✗ No API key configured")
-                status_label.set_halign(Gtk.Align.START)
+            status_label = Gtk.Label()
+            status_label.set_halign(Gtk.Align.START)
             api_box.pack_start(status_label, False, False, 0)
 
             # API key input (write-only)
@@ -1019,12 +1043,107 @@ class GimpAIPlugin(Gimp.PlugIn):
             api_box.pack_start(key_label, False, False, 0)
 
             key_entry = Gtk.Entry()
-            key_entry.set_placeholder_text(provider.key_placeholder)
             key_entry.set_visibility(False)  # Hide the text for security
             api_box.pack_start(key_entry, False, False, 0)
 
             api_frame.add(api_box)
             content_area.pack_start(api_frame, False, False, 0)
+
+            # Venice model selection - only meaningful for Venice
+            venice = PROVIDERS["venice"](self.config)
+            venice_settings = venice.settings
+
+            venice_frame = Gtk.Frame(label="Venice Models")
+            venice_box = Gtk.VBox(spacing=10)
+            venice_box.set_margin_start(10)
+            venice_box.set_margin_end(10)
+            venice_box.set_margin_top(10)
+            venice_box.set_margin_bottom(10)
+
+            model_combo = self._build_model_combo(
+                venice.generation_models(), venice_settings.get("model", "")
+            )
+            venice_box.pack_start(self._form_label("Generation model:"), False, False, 0)
+            venice_box.pack_start(model_combo, False, False, 0)
+
+            edit_model_combo = self._build_model_combo(
+                venice.edit_models(), venice_settings.get("edit_model", "")
+            )
+            venice_box.pack_start(
+                self._form_label("Edit model (inpainting and composite):"),
+                False,
+                False,
+                0,
+            )
+            venice_box.pack_start(edit_model_combo, False, False, 0)
+
+            resolution_combo = Gtk.ComboBoxText()
+            resolutions = ["1K", "2K", "4K"]
+            for value in resolutions:
+                resolution_combo.append_text(value)
+            current_resolution = venice_settings.get(
+                "resolution", venice.DEFAULT_RESOLUTION
+            )
+            if current_resolution not in resolutions:
+                current_resolution = venice.DEFAULT_RESOLUTION
+            resolution_combo.set_active(resolutions.index(current_resolution))
+            venice_box.pack_start(self._form_label("Edit resolution:"), False, False, 0)
+            venice_box.pack_start(resolution_combo, False, False, 0)
+
+            refresh_button = Gtk.Button(label="Refresh model list from Venice")
+            refresh_status = Gtk.Label()
+            refresh_status.set_halign(Gtk.Align.START)
+            refresh_status.get_style_context().add_class("dim-label")
+            refresh_button.connect(
+                "clicked",
+                self._on_refresh_venice_models,
+                model_combo,
+                edit_model_combo,
+                refresh_status,
+            )
+            venice_box.pack_start(refresh_button, False, False, 0)
+            venice_box.pack_start(refresh_status, False, False, 0)
+
+            venice_frame.add(venice_box)
+            content_area.pack_start(venice_frame, False, False, 0)
+
+            def on_provider_changed(combo):
+                """Retarget the key field and models at the selected provider"""
+                selected = PROVIDERS[provider_names[combo.get_active()]](self.config)
+
+                api_frame.set_label(f"{selected.label} API Configuration")
+                key_entry.set_text("")
+                key_entry.set_placeholder_text(selected.key_placeholder)
+
+                if selected.settings.get("api_key"):
+                    status_label.set_label("✓ API key is configured")
+                elif os.environ.get(selected.api_key_env):
+                    status_label.set_label(
+                        f"✓ Using {selected.api_key_env} from the environment"
+                    )
+                else:
+                    status_label.set_label(
+                        f"✗ No API key configured (or set {selected.api_key_env})"
+                    )
+
+                if selected.experimental:
+                    provider_note.set_label(
+                        f"{selected.label} support is experimental. Its edit endpoints "
+                        "have no mask parameter, so selections are applied as a GIMP "
+                        "layer mask after the image comes back."
+                    )
+                else:
+                    provider_note.set_label("")
+
+                if selected.name == "venice":
+                    venice_frame.set_no_show_all(False)
+                    venice_frame.show_all()
+                else:
+                    venice_frame.set_no_show_all(True)
+                    venice_frame.hide()
+
+            provider_combo.connect("changed", on_provider_changed)
+            on_provider_changed(provider_combo)
 
             # Prompt History section
             history_frame = Gtk.Frame(label="Prompt History")
@@ -1081,13 +1200,31 @@ class GimpAIPlugin(Gimp.PlugIn):
             # Run dialog
             response = dialog.run()
             if response == Gtk.ResponseType.OK:
+                selected_name = provider_names[provider_combo.get_active()]
+                self.config["provider"] = selected_name
+                print(f"DEBUG: Provider set to {selected_name}")
+
                 # Save new API key if provided
                 new_key = key_entry.get_text().strip()
                 if new_key:
-                    if provider.name not in self.config:
-                        self.config[provider.name] = {}
-                    self.config[provider.name]["api_key"] = new_key
+                    if selected_name not in self.config:
+                        self.config[selected_name] = {}
+                    self.config[selected_name]["api_key"] = new_key
                     print("DEBUG: API key updated")
+
+                # Save Venice model settings
+                venice_config = self.config.setdefault("venice", {})
+                venice_config["model"] = self._model_combo_text(model_combo)
+                venice_config["edit_model"] = self._model_combo_text(edit_model_combo)
+                venice_config["resolution"] = resolution_combo.get_active_text()
+
+                # The input limit belongs to the selected edit model
+                limits = getattr(self, "_venice_model_limits", None) or {}
+                limit = limits.get(venice_config["edit_model"])
+                if limit:
+                    venice_config["max_input_images"] = limit
+                elif "max_input_images" in venice_config:
+                    del venice_config["max_input_images"]
 
                 # Save debug mode setting
                 debug_mode = debug_checkbox.get_active()
@@ -1099,6 +1236,76 @@ class GimpAIPlugin(Gimp.PlugIn):
 
         except Exception as e:
             print(f"DEBUG: Settings dialog error: {e}")
+
+    def _form_label(self, text):
+        """Left aligned label for a settings form field"""
+        label = Gtk.Label(label=text)
+        label.set_halign(Gtk.Align.START)
+        return label
+
+    def _build_model_combo(self, model_ids, current):
+        """Build an editable combo of model ids, preselecting current.
+
+        Editable so a user can type any model id Venice adds later without
+        waiting for the plugin to ship a new list.
+        """
+        combo = Gtk.ComboBoxText.new_with_entry()
+        for model_id in model_ids:
+            combo.append_text(model_id)
+
+        if current and current not in model_ids:
+            combo.append_text(current)
+
+        combo.get_child().set_text(current or (model_ids[0] if model_ids else ""))
+        return combo
+
+    def _model_combo_text(self, combo):
+        """Read the text of an editable model combo"""
+        return combo.get_child().get_text().strip()
+
+    def _on_refresh_venice_models(
+        self, button, model_combo, edit_model_combo, status_label
+    ):
+        """Refresh the Venice model lists from the public catalogue.
+
+        No API key is sent - GET /models needs no authentication, so this
+        works with an inference-only key.
+        """
+        provider = PROVIDERS["venice"](self.config)
+        self._venice_model_limits = {}
+
+        try:
+            for kind, combo in (
+                ("generation", model_combo),
+                ("edit", edit_model_combo),
+            ):
+                req = provider.build_models_request(kind)
+                if not req:
+                    continue
+
+                with self._make_url_request(req, timeout=15) as response:
+                    models = provider.parse_models_response(response.read())
+
+                if not models:
+                    continue
+
+                selected = self._model_combo_text(combo)
+                combo.remove_all()
+                for model in models:
+                    combo.append_text(model["id"])
+                    if model.get("max_input_images"):
+                        self._venice_model_limits[model["id"]] = model[
+                            "max_input_images"
+                        ]
+
+                combo.get_child().set_text(selected or models[0]["id"])
+
+            status_label.set_label("✓ Model list refreshed from Venice")
+            print("DEBUG: Refreshed Venice model lists")
+
+        except Exception as e:
+            status_label.set_label(f"✗ Could not refresh models: {e}")
+            print(f"DEBUG: Venice model refresh failed: {e}")
 
     def _on_clear_history_clicked(self, button):
         """Handle clear history button click"""
@@ -1691,7 +1898,7 @@ class GimpAIPlugin(Gimp.PlugIn):
             # Progress during network operation (same pattern as _call_openai_edit)
             if progress_label:
                 self._update_progress(
-                    progress_label, "🚀 Sending request to GPT-Image-1..."
+                    progress_label, f"🚀 Sending request to {provider.label}..."
                 )
 
             # Make the API call with progress updates during the call
@@ -2679,15 +2886,17 @@ class GimpAIPlugin(Gimp.PlugIn):
                         "Error: At least 2 images required for composite mode",
                         None,
                     )
-                if len(image_data) > provider.max_input_images:
+                max_images = provider.max_input_images
+                if max_images is not None and len(image_data) > max_images:
                     return (
                         False,
-                        f"Error: Maximum {provider.max_input_images} layers supported",
+                        f"Error: {provider.label} supports at most {max_images} "
+                        f"layers, {len(image_data)} selected",
                         None,
                     )
             else:
                 print("DEBUG: Single image mode")
-                if not mask_data:
+                if provider.requires_mask and not mask_data:
                     return (
                         False,
                         "Error: No mask data provided for single image mode",
@@ -2864,13 +3073,14 @@ class GimpAIPlugin(Gimp.PlugIn):
                     except Exception as e:
                         print(f"DEBUG: Could not save debug file: {e}")
 
-                    debug_mask_filename = os.path.join(debug_dir, f"gpt-image-1_mask_{len(mask_data)}_bytes.png")
-                    try:
-                        with open(debug_mask_filename, "wb") as debug_file:
-                            debug_file.write(mask_data)
-                        print(f"DEBUG: Saved mask to {debug_mask_filename}")
-                    except Exception as e:
-                        print(f"DEBUG: Could not save debug file: {e}")
+                    if mask_data:
+                        debug_mask_filename = os.path.join(debug_dir, f"gpt-image-1_mask_{len(mask_data)}_bytes.png")
+                        try:
+                            with open(debug_mask_filename, "wb") as debug_file:
+                                debug_file.write(mask_data)
+                            print(f"DEBUG: Saved mask to {debug_mask_filename}")
+                        except Exception as e:
+                            print(f"DEBUG: Could not save debug file: {e}")
 
                 # Analyze both image formats by examining PNG headers
                 if image_bytes.startswith(b"\x89PNG"):
@@ -2892,7 +3102,9 @@ class GimpAIPlugin(Gimp.PlugIn):
                 else:
                     print("DEBUG: Input image is not PNG format!")
 
-                if mask_data.startswith(b"\x89PNG"):
+                if not mask_data:
+                    print("DEBUG: No mask sent - provider has no mask parameter")
+                elif mask_data.startswith(b"\x89PNG"):
                     # Check mask format and dimensions
                     if len(mask_data) > 25:
                         # Extract width and height from IHDR (bytes 16-23)
@@ -3122,12 +3334,29 @@ class GimpAIPlugin(Gimp.PlugIn):
                     f"DEBUG: Extract region: ({ctx_x1},{ctx_y1}), size {ctx_width}x{ctx_height}"
                 )
 
+                # Providers that size by aspect ratio and resolution tier
+                # rather than exact pixels answer at their own dimensions. The
+                # padding offsets below are in target-shape pixels, so bring
+                # the result to the target shape before anything else.
+                target_w, target_h = target_shape
+                needs_normalising = (
+                    ai_layer.get_width() != target_w
+                    or ai_layer.get_height() != target_h
+                )
+
                 # Scale AI result back to extract region size if needed
                 if (
-                    ai_layer.get_width() != ctx_width
+                    needs_normalising
+                    or ai_layer.get_width() != ctx_width
                     or ai_layer.get_height() != ctx_height
                 ):
                     scaled_img = ai_result_img.duplicate()
+
+                    if needs_normalising:
+                        print(
+                            f"DEBUG: Normalising AI result {ai_layer.get_width()}x{ai_layer.get_height()} to target shape {target_w}x{target_h}"
+                        )
+                        scaled_img.scale(target_w, target_h)
 
                     # For any mode with padding, remove padding first, then scale
                     if "padding_info" in context_info:
@@ -3426,10 +3655,11 @@ class GimpAIPlugin(Gimp.PlugIn):
         print(f"DEBUG: Extracted prompt: '{prompt}', mode: '{selected_mode}'")
 
         try:
+            provider = self._get_provider()
+
             # Step 3: Get API key
             api_key = self._get_api_key()
             if not api_key:
-                provider = self._get_provider()
                 self._update_progress(
                     progress_label, f"❌ No {provider.label} API key found!"
                 )
@@ -3500,9 +3730,21 @@ class GimpAIPlugin(Gimp.PlugIn):
                 image, context_info, context_info["target_size"]
             )
 
+            # Providers without a mask parameter cannot be told where to edit,
+            # so the selection is applied as a layer mask afterwards instead
+            if not provider.requires_mask and context_info.get("has_selection"):
+                print(
+                    f"DEBUG: {provider.label} has no mask parameter - applying the "
+                    "selection as a layer mask after generation"
+                )
+                self._update_progress(
+                    progress_label,
+                    f"🎭 {provider.label} has no mask API - applying selection locally",
+                )
+
             self._update_progress(progress_label, "🚀 Starting AI processing...")
 
-            # Determine the optimal size for OpenAI API
+            # Determine the optimal size for the provider
             if context_info and "target_shape" in context_info:
                 target_w, target_h = context_info["target_shape"]
                 api_size = f"{target_w}x{target_h}"
@@ -3572,7 +3814,7 @@ class GimpAIPlugin(Gimp.PlugIn):
     def run_layer_composite(
         self, procedure, run_mode, image, drawables, config, run_data
     ):
-        """Layer Composite - combine multiple layers using OpenAI API"""
+        """Layer Composite - combine multiple layers using the configured provider"""
         print("DEBUG: Layer Composite called!")
 
         # Save the currently selected layers before showing dialog (which queries layers and might clear selection)
@@ -3599,10 +3841,11 @@ class GimpAIPlugin(Gimp.PlugIn):
         )
 
         try:
+            provider = self._get_provider()
+
             # Step 2: Get API key
             api_key = self._get_api_key()
             if not api_key:
-                provider = self._get_provider()
                 self._update_progress(
                     progress_label, f"❌ No {provider.label} API key found!"
                 )
@@ -3693,6 +3936,16 @@ class GimpAIPlugin(Gimp.PlugIn):
                     print(
                         f"DEBUG: Created context-aware selection mask for composite {target_width}x{target_height}"
                     )
+
+                    if not provider.requires_mask:
+                        print(
+                            f"DEBUG: {provider.label} has no mask parameter - applying "
+                            "the selection as a layer mask after generation"
+                        )
+                        self._update_progress(
+                            progress_label,
+                            f"🎭 {provider.label} has no mask API - applying selection locally",
+                        )
                 else:
                     # ERROR: User checked the mask box but there's no selection
                     print("DEBUG: ERROR - Use mask checked but no selection found")
@@ -3716,7 +3969,7 @@ class GimpAIPlugin(Gimp.PlugIn):
             target_width, target_height = optimal_shape
             api_size = f"{target_width}x{target_height}"
             print(
-                f"DEBUG: Calling OpenAI API with {len(layer_data_list)} layers, size={api_size}..."
+                f"DEBUG: Calling {provider.label} API with {len(layer_data_list)} layers, size={api_size}..."
             )
 
             api_success, api_message, api_response = self._call_openai_edit_threaded(
@@ -3981,7 +4234,7 @@ class GimpAIPlugin(Gimp.PlugIn):
 
                 # Copy the layer to the current image
                 new_layer = Gimp.Layer.new_from_drawable(source_layer, image)
-                new_layer.set_name("GPT-Image Generated")
+                new_layer.set_name(self._get_provider().generated_layer_name)
 
                 # Add the layer to the image
                 image.insert_layer(new_layer, None, 0)
@@ -4033,7 +4286,7 @@ class GimpAIPlugin(Gimp.PlugIn):
 
                 # Copy the layer to the current image
                 new_layer = Gimp.Layer.new_from_drawable(source_layer, image)
-                new_layer.set_name("GPT-Image Generated")
+                new_layer.set_name(self._get_provider().generated_layer_name)
 
                 # Add the layer to the image
                 image.insert_layer(new_layer, None, 0)
@@ -4073,6 +4326,8 @@ class GimpAIPlugin(Gimp.PlugIn):
         )
 
         try:
+            provider = self._get_provider()
+
             # Get API key (should be available since dialog handles API key checking)
             api_key = self._get_api_key()
             if not api_key:
@@ -4108,9 +4363,9 @@ class GimpAIPlugin(Gimp.PlugIn):
                 result = False
             if result:
                 self._update_progress(
-                    progress_label, "✅ GPT-Image-1 layer generated successfully!"
+                    progress_label, f"✅ {provider.label} layer generated successfully!"
                 )
-                Gimp.message("✅ GPT-Image-1 layer generated successfully!")
+                Gimp.message(f"✅ {provider.label} layer generated successfully!")
                 return procedure.new_return_values(
                     Gimp.PDBStatusType.SUCCESS, GLib.Error()
                 )
@@ -4123,14 +4378,14 @@ class GimpAIPlugin(Gimp.PlugIn):
                     )
                 else:
                     self._update_progress(
-                        progress_label, "❌ Failed to generate GPT-Image-1 layer"
+                        progress_label, f"❌ Failed to generate {provider.label} layer"
                     )
-                    Gimp.message("❌ Failed to generate GPT-Image-1 layer")
+                    Gimp.message(f"❌ Failed to generate {provider.label} layer")
                     return procedure.new_return_values(
                         Gimp.PDBStatusType.EXECUTION_ERROR, GLib.Error()
                     )
         except Exception as e:
-            error_msg = f"Error generating GPT-Image-1 layer: {str(e)}"
+            error_msg = f"Error generating {self._get_provider().label} layer: {str(e)}"
             self._update_progress(progress_label, f"❌ Error: {str(e)}")
             print(f"ERROR: {error_msg}")
             Gimp.message(f"❌ {error_msg}")

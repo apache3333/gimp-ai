@@ -3,3 +3,7 @@ tests/__pycache__
 *.pyc
 dist/
 *.zip
+
+# Local plugin config - the plugin reads a config.json next to the plugin file,
+# and it holds API keys
+config.json
