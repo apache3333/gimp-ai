@@ -384,6 +384,30 @@ class GimpAIPlugin(Gimp.PlugIn):
 
         return api_warning_bar, True
 
+    def _add_provider_mask_note(self, content_area):
+        """Explain up front that the provider cannot be sent a mask.
+
+        Shown before the user commits rather than as a progress message,
+        which the next status update overwrites too quickly to read.
+        """
+        provider = self._get_provider()
+        if provider.requires_mask:
+            return None
+
+        note = Gtk.Label()
+        note.set_markup(
+            f"<i>{provider.label} has no mask API. Your selection is applied as a "
+            "layer mask after generation, and its position is named in the "
+            "prompt. Give the subject room - a subject larger than the "
+            "selection will be clipped at its edge.</i>"
+        )
+        note.set_halign(Gtk.Align.START)
+        note.set_line_wrap(True)
+        note.set_max_width_chars(60)
+        note.get_style_context().add_class("dim-label")
+        content_area.pack_start(note, False, False, 0)
+        return note
+
     def _is_debug_mode(self):
         """Check if debug mode is enabled (saves temp files to system temp directory)"""
         # Check config first
@@ -491,6 +515,8 @@ class GimpAIPlugin(Gimp.PlugIn):
             focused_radio = None
             full_radio = None
             if show_mode_selection:
+                self._add_provider_mask_note(content_area)
+
                 mode_frame = Gtk.Frame(label="Processing Mode:")
                 mode_frame.set_margin_top(10)
                 content_area.pack_start(mode_frame, False, False, 0)
@@ -768,6 +794,8 @@ class GimpAIPlugin(Gimp.PlugIn):
                 # Disable OK button when no API key
                 ok_button.set_sensitive(False)
                 ok_button.set_label("Configure & Continue")
+
+            self._add_provider_mask_note(content_area)
 
             # Layer list (read-only, just for user info)
             layer_frame = Gtk.Frame(label="Layers to composite:")
@@ -3766,11 +3794,6 @@ class GimpAIPlugin(Gimp.PlugIn):
                     f"DEBUG: {provider.label} has no mask parameter - applying the "
                     "selection as a layer mask after generation"
                 )
-                self._update_progress(
-                    progress_label,
-                    f"🎭 {provider.label} has no mask API - applying selection locally",
-                )
-
                 # Name the region in the prompt. Without it the model composes
                 # for the whole frame and the layer mask clips whatever falls
                 # outside the selection.
@@ -3984,11 +4007,6 @@ class GimpAIPlugin(Gimp.PlugIn):
                             f"DEBUG: {provider.label} has no mask parameter - applying "
                             "the selection as a layer mask after generation"
                         )
-                        self._update_progress(
-                            progress_label,
-                            f"🎭 {provider.label} has no mask API - applying selection locally",
-                        )
-
                         region = describe_selection_position(
                             context_info.get("selection_bounds"),
                             img_width,
