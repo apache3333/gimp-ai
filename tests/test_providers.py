@@ -524,6 +524,17 @@ def test_venice_sizing_is_model_specific():
     assert "resolution" not in body
     print("✓ A model with no tiers never receives a resolution")
 
+    # Upgrade path: a resolution left in the config by an older version, with
+    # no catalogue data beside it, must not be sent
+    stale = VeniceProvider(
+        {"venice": {"edit_model": "firered-image-edit", "resolution": "1K"}}
+    )
+    body = json.loads(
+        stale.build_edit_request(PNG_BYTES, None, "x", "1024x1024", "k").data
+    )
+    assert "resolution" not in body
+    print("✓ A stale configured tier is not sent without catalogue data")
+
     known = VeniceProvider(
         {
             "venice": {

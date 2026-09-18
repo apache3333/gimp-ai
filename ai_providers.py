@@ -536,14 +536,14 @@ class VeniceProvider(Provider):
         if not resolution:
             return None
 
-        # Block a value the catalogue says this model cannot take. An empty
-        # list is meaningful - it means the model declares no tiers at all -
-        # so only a missing key counts as "unknown".
+        # Only send a tier the catalogue confirms this model takes. Unknown
+        # counts as unsupported: most edit models have no tiers, and a stale
+        # value left in the config would otherwise fail every request.
         supported = self.settings.get("edit_resolutions")
-        if supported is not None and resolution not in supported:
+        if not supported or resolution not in supported:
             print(
-                f"DEBUG: Dropping resolution {resolution} - not supported by "
-                f"{self._edit_model()}"
+                f"DEBUG: Dropping resolution {resolution} - not confirmed for "
+                f"{self._edit_model()}. Refresh the model list in Settings."
             )
             return None
 
