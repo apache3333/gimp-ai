@@ -1128,6 +1128,23 @@ class GimpAIPlugin(Gimp.PlugIn):
             venice_box.pack_start(self._form_label("Edit resolution:"), False, False, 0)
             venice_box.pack_start(resolution_combo, False, False, 0)
 
+            # Venice blurs content it classifies as adult unless this is off
+            safe_mode_checkbox = Gtk.CheckButton()
+            safe_mode_checkbox.set_label("Blur adult content (Venice safe mode)")
+            safe_mode_checkbox.set_active(venice_settings.get("safe_mode", True))
+            venice_box.pack_start(safe_mode_checkbox, False, False, 0)
+
+            safe_mode_info = Gtk.Label()
+            safe_mode_info.set_text(
+                "Venice blurs images it classifies as adult content unless this "
+                "is off."
+            )
+            safe_mode_info.set_halign(Gtk.Align.START)
+            safe_mode_info.set_line_wrap(True)
+            safe_mode_info.set_max_width_chars(55)
+            safe_mode_info.get_style_context().add_class("dim-label")
+            venice_box.pack_start(safe_mode_info, False, False, 0)
+
             refresh_button = Gtk.Button(label="Refresh model list from Venice")
             refresh_status = Gtk.Label()
             refresh_status.set_halign(Gtk.Align.START)
@@ -1258,6 +1275,7 @@ class GimpAIPlugin(Gimp.PlugIn):
                 venice_config["resolution"] = (
                     "" if resolution == MODEL_DEFAULT_RESOLUTION else resolution
                 )
+                venice_config["safe_mode"] = safe_mode_checkbox.get_active()
 
                 # Input limit and sizing options belong to the edit model
                 self._store_venice_constraints(

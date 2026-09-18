@@ -113,6 +113,10 @@ Venice's own documentation marks its edit endpoints as experimental, and so do w
 your generation and edit models in Settings - the model list can be refreshed live from
 Venice, and you can type any model id Venice adds later.
 
+**Safe mode.** Venice blurs images it classifies as adult content unless safe mode is
+turned off. The **Blur adult content** checkbox in Settings controls this. It is on by
+default, matching Venice's own default.
+
 ## 🎨 Usage
 
 ### AI Inpainting

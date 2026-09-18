@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     region to change. The selection is still applied as a GIMP layer mask afterwards, so
     the visible result stays inside your selection. Venice also marks its edit endpoints
     experimental.
+  - A **Blur adult content (Venice safe mode)** setting, on by default to match Venice's
+    own default. Venice blurs output it classifies as adult unless this is off.
   - Resolution tier and aspect ratio are omitted unless the selected edit model's
     catalogue entry lists them. 13 of Venice's 24 edit models declare no resolution tiers
     at all, and three reject `auto` as an aspect ratio, so sending either unconditionally

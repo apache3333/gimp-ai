@@ -525,6 +525,15 @@ class VeniceProvider(Provider):
     def _edit_model(self):
         return self.settings.get("edit_model") or self.DEFAULT_EDIT_MODEL
 
+    def _safe_mode(self):
+        """Whether Venice should blur content it classifies as adult.
+
+        Venice defaults this on. The OpenAI path has always sent moderation
+        "low", so without this setting the same plugin would filter more
+        heavily on one provider than the other for no stated reason.
+        """
+        return bool(self.settings.get("safe_mode", True))
+
     def _resolution(self):
         """Resolution tier to send, or None to let the model decide.
 
@@ -589,6 +598,8 @@ class VeniceProvider(Provider):
             "size": size,
             "response_format": "b64_json",
             "output_format": "png",
+            # The compatible endpoint spells safe mode "moderation"
+            "moderation": "auto" if self._safe_mode() else "low",
         }
         return self._json_request(self.GENERATION_URL, data, api_key)
 
@@ -605,6 +616,7 @@ class VeniceProvider(Provider):
         data = {
             "prompt": prompt,
             "output_format": "png",
+            "safe_mode": self._safe_mode(),
         }
 
         # Both are model-specific and omitted unless known to be accepted

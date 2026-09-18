@@ -744,6 +744,41 @@ def test_venice_model_discovery():
     print("✓ Models declaring no limit report None")
 
 
+def test_venice_safe_mode():
+    """Test the safe mode control for Venice's adult content filtering."""
+    print("\n=== Testing Venice Safe Mode ===")
+
+    # Venice's own default: safe mode on
+    default = VeniceProvider({"venice": {}})
+    gen = json.loads(default.build_generation_request("x", "1024x1024", "k").data)
+    edit = json.loads(
+        default.build_edit_request(PNG_BYTES, None, "x", "1024x1024", "k").data
+    )
+    assert gen["moderation"] == "auto"
+    assert edit["safe_mode"] is True
+    print("✓ Safe mode is on unless turned off")
+
+    # Turned off
+    off = VeniceProvider({"venice": {"safe_mode": False}})
+    gen = json.loads(off.build_generation_request("x", "1024x1024", "k").data)
+    edit = json.loads(
+        off.build_edit_request(PNG_BYTES, None, "x", "1024x1024", "k").data
+    )
+    assert gen["moderation"] == "low"
+    assert edit["safe_mode"] is False
+    print("✓ Turning it off disables blurring on both endpoints")
+
+    # Multi-edit carries it too
+    multi = json.loads(
+        off.build_edit_request([b"A", b"B"], None, "x", "1024x1024", "k").data
+    )
+    assert multi["safe_mode"] is False
+    print("✓ Multi-edit carries the setting")
+
+    assert default.generation_models() and default.edit_models()
+    print("✓ Starter model lists are populated")
+
+
 def test_region_hint():
     """Test naming the edit region for providers that take no mask."""
     print("\n=== Testing Region Hint ===")
@@ -817,6 +852,7 @@ def run_all_tests():
         test_venice_edit_response_parsing()
         test_venice_http_errors()
         test_venice_model_discovery()
+        test_venice_safe_mode()
         test_region_hint()
 
         print("\n" + "=" * 60)
