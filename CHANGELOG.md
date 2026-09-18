@@ -5,6 +5,25 @@ All notable changes to the GIMP AI Plugin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Provider abstraction**: AI service specifics (endpoints, models, request building,
+  response parsing, credentials) now live behind a `Provider` interface in the new
+  `ai_providers.py` module. Behaviour is unchanged for OpenAI users and existing config
+  files keep working.
+
+### Added
+
+- **New required file**: `ai_providers.py` must be installed alongside `gimp-ai-plugin.py`
+  and `coordinate_utils.py`. The automated installer and release package handle this; manual
+  installs now copy three files instead of two.
+- Unit tests for the provider abstraction (`tests/test_providers.py`), and `tests/run_tests.py`
+  now runs every test suite rather than only the coordinate tests.
+
+---
+
 ## [0.8.0-beta] - 2024-10-04
 
 ### 🎉 Initial Beta Release

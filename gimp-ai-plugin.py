@@ -39,6 +39,9 @@ from coordinate_utils import (
     calculate_scale_from_shape,
 )
 
+# Import provider abstraction (pure Python, no GIMP dependencies)
+from ai_providers import get_provider, ProviderError
+
 
 class GimpAIPlugin(Gimp.PlugIn):
     """Simplified AI Plugin"""
@@ -211,23 +214,13 @@ class GimpAIPlugin(Gimp.PlugIn):
         """Get the last used prompt"""
         return self.config.get("last_prompt", "")
 
+    def _get_provider(self):
+        """Get the AI provider selected in the config"""
+        return get_provider(self.config)
+
     def _get_api_key(self):
-        """Get OpenAI API key from config or environment"""
-        # Try config file first
-        if (
-            self.config
-            and "openai" in self.config
-            and self.config["openai"].get("api_key")
-        ):
-            return self.config["openai"]["api_key"]
-
-        # Try environment variable
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if api_key:
-            return api_key
-
-        # No API key found
-        return None
+        """Get the configured provider's API key from config or environment"""
+        return self._get_provider().get_api_key(self.config, os.environ)
 
     def _get_processing_mode(self, dialog_mode=None):
         """Determine processing mode based on dialog selection or fallback to config"""
@@ -356,7 +349,9 @@ class GimpAIPlugin(Gimp.PlugIn):
 
         # Warning message
         warning_label = Gtk.Label()
-        warning_label.set_markup("⚠️ OpenAI API key not configured")
+        warning_label.set_markup(
+            f"⚠️ {self._get_provider().label} API key not configured"
+        )
         warning_label.set_halign(Gtk.Align.START)
 
         # Configure button - connect to main dialog response
@@ -1000,7 +995,8 @@ class GimpAIPlugin(Gimp.PlugIn):
             content_area.set_margin_bottom(20)
 
             # API Key section
-            api_frame = Gtk.Frame(label="OpenAI API Configuration")
+            provider = self._get_provider()
+            api_frame = Gtk.Frame(label=f"{provider.label} API Configuration")
             api_box = Gtk.VBox(spacing=10)
             api_box.set_margin_start(10)
             api_box.set_margin_end(10)
@@ -1008,7 +1004,7 @@ class GimpAIPlugin(Gimp.PlugIn):
             api_box.set_margin_bottom(10)
 
             # Current API key status
-            current_key = self.config.get("openai", {}).get("api_key")
+            current_key = self.config.get(provider.name, {}).get("api_key")
             if current_key:
                 status_label = Gtk.Label(label="✓ API key is configured")
                 status_label.set_halign(Gtk.Align.START)
@@ -1023,7 +1019,7 @@ class GimpAIPlugin(Gimp.PlugIn):
             api_box.pack_start(key_label, False, False, 0)
 
             key_entry = Gtk.Entry()
-            key_entry.set_placeholder_text("sk-proj-...")
+            key_entry.set_placeholder_text(provider.key_placeholder)
             key_entry.set_visibility(False)  # Hide the text for security
             api_box.pack_start(key_entry, False, False, 0)
 
@@ -1088,9 +1084,9 @@ class GimpAIPlugin(Gimp.PlugIn):
                 # Save new API key if provided
                 new_key = key_entry.get_text().strip()
                 if new_key:
-                    if "openai" not in self.config:
-                        self.config["openai"] = {}
-                    self.config["openai"]["api_key"] = new_key
+                    if provider.name not in self.config:
+                        self.config[provider.name] = {}
+                    self.config[provider.name]["api_key"] = new_key
                     print("DEBUG: API key updated")
 
                 # Save debug mode setting
@@ -1676,36 +1672,19 @@ class GimpAIPlugin(Gimp.PlugIn):
     def _call_openai_generation(
         self, prompt, api_key, size="auto", progress_label=None
     ):
-        """Call OpenAI GPT-Image-1 API for image generation with progress updates"""
-        try:
-            import json
-            import urllib.request
+        """Call the configured provider's generation API with progress updates"""
+        provider = self._get_provider()
 
+        try:
             print(f"DEBUG: Calling GPT-Image-1 generation API with prompt: {prompt}")
 
             # Determine optimal size
-            if size == "auto":
-                optimal_size = "1536x1024"  # Default landscape
-            else:
-                optimal_size = size
+            optimal_size = provider.resolve_generation_size(size)
 
             print(f"DEBUG: Using size {optimal_size} for generation")
 
-            # Prepare the request data
-            data = {
-                "model": "gpt-image-1",
-                "prompt": prompt,
-                "n": 1,
-                "size": optimal_size,
-                "quality": "high",
-            }
-
-            # Create the request
-            json_data = json.dumps(data).encode("utf-8")
-            url = "https://api.openai.com/v1/images/generations"
-            req = urllib.request.Request(url, data=json_data)
-            req.add_header("Content-Type", "application/json")
-            req.add_header("Authorization", f"Bearer {api_key}")
+            # Build the provider-specific request
+            req = provider.build_generation_request(prompt, optimal_size, api_key)
 
             print("DEBUG: Sending real GPT-Image-1 generation request...")
 
@@ -1717,7 +1696,7 @@ class GimpAIPlugin(Gimp.PlugIn):
 
             # Make the API call with progress updates during the call
             with self._make_url_request(req, timeout=180) as response:
-                response_data = json.loads(response.read().decode("utf-8"))
+                response_body = response.read()
 
             print("DEBUG: GPT-Image-1 generation response received")
 
@@ -1725,24 +1704,14 @@ class GimpAIPlugin(Gimp.PlugIn):
                 self._update_progress(progress_label, "✅ Processing AI response...")
 
             # Process the response
-            if "data" in response_data and len(response_data["data"]) > 0:
-                result_data = response_data["data"][0]
+            image_data = provider.parse_generation_response(response_body)
+            print(f"DEBUG: Decoded {len(image_data)} bytes of image data")
 
-                if "b64_json" in result_data:
-                    print("DEBUG: Processing base64 image data from GPT-Image-1")
-                    import base64
+            return True, "Image generation successful", image_data
 
-                    image_data = base64.b64decode(result_data["b64_json"])
-                    print(f"DEBUG: Decoded {len(image_data)} bytes of image data")
-
-                    return True, "Image generation successful", image_data
-                else:
-                    print("ERROR: No b64_json in GPT-Image-1 response")
-                    return False, "No image data in response", None
-            else:
-                print("ERROR: No data in GPT-Image-1 response")
-                return False, "No data in API response", None
-
+        except ProviderError as e:
+            print(f"ERROR: {provider.label} generation response invalid: {e}")
+            return False, str(e), None
         except Exception as e:
             print(f"ERROR: GPT-Image-1 generation API call failed: {str(e)}")
             return False, str(e), None
@@ -2677,47 +2646,6 @@ class GimpAIPlugin(Gimp.PlugIn):
         except Exception as e:
             print(f"DEBUG: Color matching failed: {e}")
 
-    def _create_multipart_data(self, fields, files):
-        """Create multipart form data for file upload - supports image arrays"""
-        import email.mime.multipart
-        import email.mime.text
-        import email.mime.application
-        import uuid
-
-        boundary = uuid.uuid4().hex
-        body = b""
-
-        # Add text fields
-        for key, value in fields.items():
-            body += f"--{boundary}\r\n".encode()
-            body += f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode()
-            body += f"{value}\r\n".encode()
-
-        # Add file fields - handle both single files and arrays
-        for key, file_data in files.items():
-            if key == "image" and isinstance(file_data, list):
-                # Handle image array for composite mode - use image[] array syntax
-                for i, (filename, data, content_type) in enumerate(file_data):
-                    body += f"--{boundary}\r\n".encode()
-                    body += f'Content-Disposition: form-data; name="image[]"; filename="{filename}"\r\n'.encode()
-                    body += f"Content-Type: {content_type}\r\n\r\n".encode()
-                    body += data
-                    body += b"\r\n"
-                print(f"DEBUG: Added {len(file_data)} images to multipart data")
-            else:
-                # Handle single file (like mask or single image)
-                filename, data, content_type = file_data
-                body += f"--{boundary}\r\n".encode()
-                body += f'Content-Disposition: form-data; name="{key}"; filename="{filename}"\r\n'.encode()
-                body += f"Content-Type: {content_type}\r\n\r\n".encode()
-                body += data
-                body += b"\r\n"
-
-        # End boundary
-        body += f"--{boundary}--\r\n".encode()
-
-        return body, boundary
-
     def _call_openai_edit(
         self,
         image_data,
@@ -2727,7 +2655,9 @@ class GimpAIPlugin(Gimp.PlugIn):
         size="1024x1024",
         progress_label=None,
     ):
-        """Call OpenAI GPT-Image-1 API for image editing (supports single image or array)"""
+        """Call the configured provider's edit API (supports single image or array)"""
+        provider = self._get_provider()
+
         try:
             print(f"DEBUG: Calling GPT-Image-1 API with prompt: {prompt}")
 
@@ -2749,8 +2679,12 @@ class GimpAIPlugin(Gimp.PlugIn):
                         "Error: At least 2 images required for composite mode",
                         None,
                     )
-                if len(image_data) > 16:
-                    return False, "Error: Maximum 16 layers supported", None
+                if len(image_data) > provider.max_input_images:
+                    return (
+                        False,
+                        f"Error: Maximum {provider.max_input_images} layers supported",
+                        None,
+                    )
             else:
                 print("DEBUG: Single image mode")
                 if not mask_data:
@@ -2772,27 +2706,12 @@ class GimpAIPlugin(Gimp.PlugIn):
                 }
                 return True, "API call successful (mock - no API key)", mock_response
 
-            url = "https://api.openai.com/v1/images/edits"
-
-            # Prepare multipart form data for GPT-Image-1
-            fields = {
-                "model": "gpt-image-1",
-                "prompt": prompt,
-                "n": "1",
-                "quality": "high",
-                "size": size if size else "1024x1024",  # Use provided size or default
-                "moderation": "low",  # Less restrictive filtering
-                "input_fidelity": "high",  # High fidelity for better results
-            }
-
-            # Prepare files for API based on mode
+            # Collect validated image bytes for the provider to package
             import base64
-
-            files = {}
 
             if is_array_mode:
                 # Array mode - multiple images for composite (with same validation as single mode)
-                image_files = []
+                image_payload = []
 
                 for i, layer_data in enumerate(image_data):
                     # Debug the input data format
@@ -2856,10 +2775,8 @@ class GimpAIPlugin(Gimp.PlugIn):
                     else:
                         print(f"DEBUG: Array image {i} is not PNG format!")
 
-                    image_files.append((f"image_{i}.png", layer_bytes, "image/png"))
+                    image_payload.append(layer_bytes)
                     print(f"DEBUG: Added validated layer {i}: {len(layer_bytes)} bytes")
-
-                files["image"] = image_files
 
                 # Add mask if provided (applies to first image) - with same validation
                 if mask_data:
@@ -2896,8 +2813,8 @@ class GimpAIPlugin(Gimp.PlugIn):
                             print(f"DEBUG: Array mask size: {len(mask_data)} bytes")
 
                             # Check dimensions against first image (if available)
-                            if image_files:
-                                first_image_bytes = image_files[0][1]
+                            if image_payload:
+                                first_image_bytes = image_payload[0]
                                 if (
                                     first_image_bytes.startswith(b"\x89PNG")
                                     and len(first_image_bytes) > 25
@@ -2924,13 +2841,12 @@ class GimpAIPlugin(Gimp.PlugIn):
                     else:
                         print("DEBUG: Array mask is not PNG format!")
 
-                    files["mask"] = ("mask.png", mask_data, "image/png")
                     print(
                         f"DEBUG: Added validated mask: {len(mask_data)} bytes (applies to first image)"
                     )
 
                 print(
-                    f"DEBUG: Prepared {len(image_files)} validated images for composite mode"
+                    f"DEBUG: Prepared {len(image_payload)} validated images for composite mode"
                 )
 
             else:
@@ -3004,21 +2920,12 @@ class GimpAIPlugin(Gimp.PlugIn):
                 else:
                     print("DEBUG: Mask is not PNG format!")
 
-                files = {
-                    "image": ("image.png", image_bytes, "image/png"),
-                    "mask": ("mask.png", mask_data, "image/png"),
-                }
+                image_payload = image_bytes
 
-            body, boundary = self._create_multipart_data(fields, files)
-
-            # Create request
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": f"multipart/form-data; boundary={boundary}",
-                "User-Agent": "GIMP-AI-Plugin/1.0",
-            }
-
-            req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+            # Build the provider-specific request
+            req = provider.build_edit_request(
+                image_payload, mask_data, prompt, size, api_key
+            )
 
             print("DEBUG: Sending real GPT-Image-1 API request...")
 
@@ -3042,24 +2949,27 @@ class GimpAIPlugin(Gimp.PlugIn):
                     Gimp.progress_set_text("Processing AI response...")
                     Gimp.progress_update(0.7)  # 70% - Reading response
 
-                response_data = response.read().decode("utf-8")
+                response_body = response.read()
 
                 if progress_label:
                     self._update_progress(progress_label, "Parsing AI result...", 0.75)
                 else:
                     Gimp.progress_set_text("Parsing AI result...")
-                    Gimp.progress_update(0.75)  # 75% - Parsing JSON
+                    Gimp.progress_update(0.75)  # 75% - Parsing response
 
-                response_json = json.loads(response_data)
+                image_result = provider.parse_edit_response(response_body)
                 print(
-                    f"DEBUG: GPT-Image-1 API response received: {len(response_data)} bytes"
+                    f"DEBUG: GPT-Image-1 API response received: {len(response_body)} bytes"
                 )
-                return True, "GPT-Image-1 API call successful", response_json
+                return True, "GPT-Image-1 API call successful", image_result
 
         except urllib.error.HTTPError as e:
             error_body = e.read().decode("utf-8") if hasattr(e, "read") else str(e)
             print(f"DEBUG: GPT-Image-1 API HTTP error: {e.code} - {error_body}")
-            return False, f"GPT-Image-1 API error {e.code}: {error_body[:200]}", None
+            return False, provider.format_http_error(e.code, error_body), None
+        except ProviderError as e:
+            print(f"DEBUG: {provider.label} edit response invalid: {e}")
+            return False, str(e), None
         except Exception as e:
             print(f"DEBUG: GPT-Image-1 API call failed: {e}")
             return False, f"GPT-Image-1 API call failed: {str(e)}", None
@@ -3094,44 +3004,58 @@ class GimpAIPlugin(Gimp.PlugIn):
             # Validate inputs
             if not image:
                 return False, "Error: No GIMP image provided"
-            if not api_response or "data" not in api_response:
-                return False, "Invalid API response - no data"
-            if not api_response["data"] or len(api_response["data"]) == 0:
-                return False, "Invalid API response - empty data array"
 
-            result_data = api_response["data"][0]
-
-            # Handle both URL and base64 response formats
-            if "url" in result_data:
-                # URL format (DALL-E 2 style)
-                image_url = result_data["url"]
-                print(f"DEBUG: Downloading result from: {image_url}")
-
-                # Update progress for download phase
-                Gimp.progress_set_text("Downloading AI result...")
-                Gimp.progress_update(0.8)  # 80% - Starting download
-                Gimp.displays_flush()
-
-                # Download from URL
-                with self._make_url_request(image_url, timeout=60) as response:
-                    image_data = response.read()
-
-            elif "b64_json" in result_data:
-                # Base64 format (GPT-Image-1 style)
-                print("DEBUG: Processing base64 image data from GPT-Image-1")
+            if isinstance(api_response, (bytes, bytearray)):
+                # Image bytes already decoded by the provider
+                print("DEBUG: Using image data decoded by provider")
 
                 # Update progress for processing phase
                 Gimp.progress_set_text("Processing AI result...")
                 Gimp.progress_update(0.8)  # 80% - Processing data
                 Gimp.displays_flush()
 
-                # Decode base64 data
-                import base64
-
-                image_data = base64.b64decode(result_data["b64_json"])
+                image_data = bytes(api_response)
 
             else:
-                return False, "Invalid API response - no image URL or base64 data"
+                # Raw API response dict (mock responses and legacy formats)
+                if not api_response or "data" not in api_response:
+                    return False, "Invalid API response - no data"
+                if not api_response["data"] or len(api_response["data"]) == 0:
+                    return False, "Invalid API response - empty data array"
+
+                result_data = api_response["data"][0]
+
+                # Handle both URL and base64 response formats
+                if "url" in result_data:
+                    # URL format (DALL-E 2 style)
+                    image_url = result_data["url"]
+                    print(f"DEBUG: Downloading result from: {image_url}")
+
+                    # Update progress for download phase
+                    Gimp.progress_set_text("Downloading AI result...")
+                    Gimp.progress_update(0.8)  # 80% - Starting download
+                    Gimp.displays_flush()
+
+                    # Download from URL
+                    with self._make_url_request(image_url, timeout=60) as response:
+                        image_data = response.read()
+
+                elif "b64_json" in result_data:
+                    # Base64 format (GPT-Image-1 style)
+                    print("DEBUG: Processing base64 image data from GPT-Image-1")
+
+                    # Update progress for processing phase
+                    Gimp.progress_set_text("Processing AI result...")
+                    Gimp.progress_update(0.8)  # 80% - Processing data
+                    Gimp.displays_flush()
+
+                    # Decode base64 data
+                    import base64
+
+                    image_data = base64.b64decode(result_data["b64_json"])
+
+                else:
+                    return False, "Invalid API response - no image URL or base64 data"
 
             print(f"DEBUG: Processed {len(image_data)} bytes")
 
@@ -3505,10 +3429,11 @@ class GimpAIPlugin(Gimp.PlugIn):
             # Step 3: Get API key
             api_key = self._get_api_key()
             if not api_key:
-                self._update_progress(progress_label, "❌ No OpenAI API key found!")
-                Gimp.message(
-                    "❌ No OpenAI API key found!\n\nPlease set your API key in:\n- config.json file\n- OPENAI_API_KEY environment variable"
+                provider = self._get_provider()
+                self._update_progress(
+                    progress_label, f"❌ No {provider.label} API key found!"
                 )
+                Gimp.message(f"❌ {provider.missing_key_message()}")
                 return procedure.new_return_values(
                     Gimp.PDBStatusType.CANCEL, GLib.Error()
                 )
@@ -3677,10 +3602,11 @@ class GimpAIPlugin(Gimp.PlugIn):
             # Step 2: Get API key
             api_key = self._get_api_key()
             if not api_key:
-                self._update_progress(progress_label, "❌ No OpenAI API key found!")
-                Gimp.message(
-                    "❌ No OpenAI API key found!\n\nPlease set your API key in:\n- config.json file\n- OPENAI_API_KEY environment variable"
+                provider = self._get_provider()
+                self._update_progress(
+                    progress_label, f"❌ No {provider.label} API key found!"
                 )
+                Gimp.message(f"❌ {provider.missing_key_message()}")
                 return procedure.new_return_values(
                     Gimp.PDBStatusType.CANCEL, GLib.Error()
                 )
@@ -3807,66 +3733,29 @@ class GimpAIPlugin(Gimp.PlugIn):
                 self._update_progress(progress_label, "Processing AI response...")
 
                 # Create result layer in GIMP
-                if (
-                    api_response
-                    and "data" in api_response
-                    and len(api_response["data"]) > 0
-                ):
-                    result_data = api_response["data"][0]
+                if api_response:
+                    # Use the same result processing as inpainting to handle padding removal and scaling
+                    print(
+                        "DEBUG: Using inpainting result processing to handle padding and scaling..."
+                    )
+                    success, message = self._download_and_composite_result(
+                        image, api_response, context_info, "full"
+                    )
 
-                    # Handle both URL and base64 response formats
-                    if "b64_json" in result_data:
-                        # Base64 format (gpt-image-1)
-                        print("DEBUG: Processing base64 composite result...")
+                    if success:
+                        # Rename the layer to indicate it's a composite
+                        new_layer = image.get_layers()[0]
+                        new_layer.set_name("Layer Composite")
 
-                        # Use the same result processing as inpainting to handle padding removal and scaling
-                        print(
-                            "DEBUG: Using inpainting result processing to handle padding and scaling..."
+                        self._update_progress(
+                            progress_label,
+                            "✅ Layer Composite completed successfully!",
                         )
-                        success, message = self._download_and_composite_result(
-                            image, api_response, context_info, "full"
-                        )
-
-                        if success:
-                            # Rename the layer to indicate it's a composite
-                            new_layer = image.get_layers()[0]
-                            new_layer.set_name("Layer Composite")
-
-                            self._update_progress(
-                                progress_label,
-                                "✅ Layer Composite completed successfully!",
-                            )
-                            Gimp.message("✅ Layer Composite completed successfully!")
-                            print("DEBUG: Layer composite creation successful")
-                        else:
-                            raise Exception(
-                                f"Failed to process composite result: {message}"
-                            )
-
-                    elif "url" in result_data:
-                        # URL format (fallback)
-                        print("DEBUG: Downloading composite result from URL...")
-
-                        import urllib.request
-
-                        with urllib.request.urlopen(result_data["url"]) as response:
-                            image_data = response.read()
-
-                        # Create new layer with result
-                        temp_image = self._create_image_from_data(image_data)
-                        if temp_image:
-                            new_layer = temp_image.get_layers()[0].copy()
-                            new_layer.set_name("Layer Composite")
-                            image.insert_layer(new_layer, None, 0)
-                            temp_image.delete()
-
-                            Gimp.progress_update(1.0)  # 100% - Complete
-                            Gimp.message("✅ Layer Composite completed successfully!")
-                        else:
-                            raise Exception("Failed to create image from result data")
+                        Gimp.message("✅ Layer Composite completed successfully!")
+                        print("DEBUG: Layer composite creation successful")
                     else:
                         raise Exception(
-                            "No image data (b64_json or url) in API response"
+                            f"Failed to process composite result: {message}"
                         )
                 else:
                     self._update_progress(progress_label, "❌ No data in API response")
@@ -3895,36 +3784,6 @@ class GimpAIPlugin(Gimp.PlugIn):
             if original_selected_layers:
                 image.set_selected_layers(original_selected_layers)
                 print("DEBUG: Restored layer selection after layer composite operation")
-
-    def _create_image_from_data(self, image_data):
-        """Helper function to create GIMP image from binary data"""
-        try:
-            import tempfile
-            import os
-
-            print(f"DEBUG: Writing {len(image_data)} bytes to temp file...")
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False, mode='wb') as temp_file:
-                temp_file.write(image_data)
-                temp_file.flush()
-                os.fsync(temp_file.fileno())
-                temp_path = temp_file.name
-            print(f"DEBUG: Temp file created: {temp_path}")
-
-            # Load image using GIMP
-            print("DEBUG: Creating Gio.File...")
-            file = Gio.File.new_for_path(temp_path)
-            print("DEBUG: Calling Gimp.file_load()...")
-            temp_image = Gimp.file_load(Gimp.RunMode.NONINTERACTIVE, file)
-            print("DEBUG: Gimp.file_load() completed")
-
-            print("DEBUG: Cleaning up temp file...")
-            os.unlink(temp_path)
-            print("DEBUG: Image creation successful")
-            return temp_image
-
-        except Exception as e:
-            print(f"DEBUG: Failed to create image from data: {e}")
-            return None
 
     def _generate_gpt_image_layer_threaded(
         self, image, prompt, api_key, size="auto", progress_label=None

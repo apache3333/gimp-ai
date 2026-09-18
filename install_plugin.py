@@ -208,7 +208,7 @@ def find_plugin_files():
     """Find the plugin files in the current directory or parent directory"""
     current_dir = Path(__file__).parent
 
-    required_files = ["gimp-ai-plugin.py", "coordinate_utils.py"]
+    required_files = ["gimp-ai-plugin.py", "coordinate_utils.py", "ai_providers.py"]
 
     # Check current directory
     all_found = all((current_dir / f).exists() for f in required_files)
@@ -285,12 +285,14 @@ def install_plugin():
         print("Please make sure you have these files:")
         print("  • gimp-ai-plugin.py")
         print("  • coordinate_utils.py")
+        print("  • ai_providers.py")
         print()
         print("They should be in the same directory as this installer.")
         return False
 
     plugin_file = source_dir / "gimp-ai-plugin.py"
     utils_file = source_dir / "coordinate_utils.py"
+    providers_file = source_dir / "ai_providers.py"
 
     print(f"✅ Found plugin files in: {source_dir}")
     print()
@@ -352,12 +354,16 @@ def install_plugin():
     try:
         dest_plugin = os.path.join(plugin_dest_dir, "gimp-ai-plugin.py")
         dest_utils = os.path.join(plugin_dest_dir, "coordinate_utils.py")
+        dest_providers = os.path.join(plugin_dest_dir, "ai_providers.py")
 
         shutil.copy2(plugin_file, dest_plugin)
         print(f"  ✅ gimp-ai-plugin.py")
 
         shutil.copy2(utils_file, dest_utils)
         print(f"  ✅ coordinate_utils.py")
+
+        shutil.copy2(providers_file, dest_providers)
+        print(f"  ✅ ai_providers.py")
 
     except (IOError, PermissionError) as e:
         print(f"❌ ERROR copying files: {e}")
