@@ -104,6 +104,10 @@ OpenAI. Editing has two differences worth knowing before you rely on it:
   selection is much smaller than what you asked for, widen it or use Full Image mode.
 - **Sizing is approximate.** Venice sizes output by aspect ratio and a resolution tier
   rather than exact pixels, so results are scaled to fit before being composited.
+- **Resolution and aspect ratio are per-model.** Most Venice edit models support neither,
+  so the plugin sends nothing and lets the model decide - the image it uploads already has
+  the right shape. Click **Refresh model list from Venice** in Settings to learn what your
+  chosen model supports; only then does the Edit resolution setting take effect.
 
 Venice's own documentation marks its edit endpoints as experimental, and so do we. Pick
 your generation and edit models in Settings - the model list can be refreshed live from

@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     region to change. The selection is still applied as a GIMP layer mask afterwards, so
     the visible result stays inside your selection. Venice also marks its edit endpoints
     experimental.
+  - Resolution tier and aspect ratio are omitted unless the selected edit model's
+    catalogue entry lists them. 13 of Venice's 24 edit models declare no resolution tiers
+    at all, and three reject `auto` as an aspect ratio, so sending either unconditionally
+    fails with a 400.
   - Because of that, Venice edit prompts have the selection's region appended
     (`add a dwarf sitting` becomes `add a dwarf sitting, in the centre of the image`).
     Without the hint the model composes for the whole frame and the layer mask clips

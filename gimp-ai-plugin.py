@@ -7,6 +7,9 @@ GIMP AI Plugin - Simplified version to fix crash
 
 VERSION = "0.14.0"
 
+# Settings label for "send no resolution and let the model choose"
+MODEL_DEFAULT_RESOLUTION = "Model default"
+
 import sys
 import os
 import gi
@@ -56,7 +59,7 @@ class GimpAIPlugin(Gimp.PlugIn):
         self.config = self._load_config()
         self._cancel_requested = False
         # Populated by the settings dialog when it refreshes Venice's catalogue
-        self._venice_model_limits = {}
+        self._venice_model_constraints = {}
 
     def _load_config(self):
         """Load configuration from various locations"""
@@ -1082,15 +1085,17 @@ class GimpAIPlugin(Gimp.PlugIn):
             )
             venice_box.pack_start(edit_model_combo, False, False, 0)
 
+            # Most edit models have no resolution tiers, so the default sends
+            # nothing and lets the model decide
             resolution_combo = Gtk.ComboBoxText()
-            resolutions = ["1K", "2K", "4K"]
+            resolutions = [MODEL_DEFAULT_RESOLUTION, "1K", "2K", "4K"]
             for value in resolutions:
                 resolution_combo.append_text(value)
-            current_resolution = venice_settings.get(
-                "resolution", venice.DEFAULT_RESOLUTION
+            current_resolution = (
+                venice_settings.get("resolution") or MODEL_DEFAULT_RESOLUTION
             )
             if current_resolution not in resolutions:
-                current_resolution = venice.DEFAULT_RESOLUTION
+                current_resolution = MODEL_DEFAULT_RESOLUTION
             resolution_combo.set_active(resolutions.index(current_resolution))
             venice_box.pack_start(self._form_label("Edit resolution:"), False, False, 0)
             venice_box.pack_start(resolution_combo, False, False, 0)
@@ -1221,15 +1226,15 @@ class GimpAIPlugin(Gimp.PlugIn):
                 venice_config = self.config.setdefault("venice", {})
                 venice_config["model"] = self._model_combo_text(model_combo)
                 venice_config["edit_model"] = self._model_combo_text(edit_model_combo)
-                venice_config["resolution"] = resolution_combo.get_active_text()
+                resolution = resolution_combo.get_active_text()
+                venice_config["resolution"] = (
+                    "" if resolution == MODEL_DEFAULT_RESOLUTION else resolution
+                )
 
-                # The input limit belongs to the selected edit model
-                limits = getattr(self, "_venice_model_limits", None) or {}
-                limit = limits.get(venice_config["edit_model"])
-                if limit:
-                    venice_config["max_input_images"] = limit
-                elif "max_input_images" in venice_config:
-                    del venice_config["max_input_images"]
+                # Input limit and sizing options belong to the edit model
+                self._store_venice_constraints(
+                    venice_config, venice_config["edit_model"]
+                )
 
                 # Save debug mode setting
                 debug_mode = debug_checkbox.get_active()
@@ -1277,7 +1282,7 @@ class GimpAIPlugin(Gimp.PlugIn):
         works with an inference-only key.
         """
         provider = PROVIDERS["venice"](self.config)
-        self._venice_model_limits = {}
+        self._venice_model_constraints = {}
 
         try:
             for kind, combo in (
@@ -1298,10 +1303,7 @@ class GimpAIPlugin(Gimp.PlugIn):
                 combo.remove_all()
                 for model in models:
                     combo.append_text(model["id"])
-                    if model.get("max_input_images"):
-                        self._venice_model_limits[model["id"]] = model[
-                            "max_input_images"
-                        ]
+                    self._venice_model_constraints[model["id"]] = model
 
                 combo.get_child().set_text(selected or models[0]["id"])
 
@@ -1311,6 +1313,28 @@ class GimpAIPlugin(Gimp.PlugIn):
         except Exception as e:
             status_label.set_label(f"✗ Could not refresh models: {e}")
             print(f"DEBUG: Venice model refresh failed: {e}")
+
+    def _store_venice_constraints(self, venice_config, edit_model):
+        """Record the selected edit model's catalogue constraints.
+
+        Venice rejects a resolution tier or aspect ratio the model does not
+        support, and most edit models support neither, so the provider only
+        sends them when these lists say it is safe.
+        """
+        for key in ("max_input_images", "edit_aspect_ratios", "edit_resolutions"):
+            venice_config.pop(key, None)
+
+        constraints = (self._venice_model_constraints or {}).get(edit_model)
+        if not constraints:
+            return
+
+        if constraints.get("max_input_images"):
+            venice_config["max_input_images"] = constraints["max_input_images"]
+
+        # Stored even when empty - "this model declares no tiers" is what
+        # stops an unsupported value being sent
+        venice_config["edit_aspect_ratios"] = constraints.get("aspect_ratios") or []
+        venice_config["edit_resolutions"] = constraints.get("resolutions") or []
 
     def _on_clear_history_clicked(self, button):
         """Handle clear history button click"""

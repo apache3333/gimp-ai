@@ -450,7 +450,12 @@ class VeniceProvider(Provider):
 
     DEFAULT_MODEL = "venice-sd35"
     DEFAULT_EDIT_MODEL = "firered-image-edit"
-    DEFAULT_RESOLUTION = "1K"
+
+    # Resolution tiers and aspect ratios are per-model and most edit models
+    # support neither. Sending an unsupported value is a 400, so both are
+    # omitted unless the model is known to accept them - the input image
+    # already carries the shape, which Venice infers from when told nothing.
+    RESOLUTION_MODEL_DEFAULT = ""
 
     # Most edit models declare maxInputImages 6; the settings dialog refreshes
     # this from the live catalogue, and the API rejects anything above its own
@@ -462,8 +467,8 @@ class VeniceProvider(Provider):
     # uses the OpenAI compatible endpoint instead.
     DEFAULT_GENERATION_SIZE = "1536x1024"
 
-    # The three shapes the plugin produces map exactly onto aspect ratios that
-    # every Venice edit model supports.
+    # The three shapes the plugin produces map onto these aspect ratios. Only
+    # sent when the selected model's catalogue entry lists the value.
     ASPECT_RATIOS = {
         "1024x1024": "1:1",
         "1536x1024": "3:2",
@@ -521,15 +526,47 @@ class VeniceProvider(Provider):
         return self.settings.get("edit_model") or self.DEFAULT_EDIT_MODEL
 
     def _resolution(self):
-        return self.settings.get("resolution") or self.DEFAULT_RESOLUTION
+        """Resolution tier to send, or None to let the model decide.
+
+        Most edit models have no resolution tiers, and sending one to a model
+        that lacks them is rejected outright, so nothing is sent unless the
+        user picked a tier explicitly.
+        """
+        resolution = self.settings.get("resolution")
+        if not resolution:
+            return None
+
+        # Block a value the catalogue says this model cannot take. An empty
+        # list is meaningful - it means the model declares no tiers at all -
+        # so only a missing key counts as "unknown".
+        supported = self.settings.get("edit_resolutions")
+        if supported is not None and resolution not in supported:
+            print(
+                f"DEBUG: Dropping resolution {resolution} - not supported by "
+                f"{self._edit_model()}"
+            )
+            return None
+
+        return resolution
 
     def _aspect_ratio(self, size):
-        """Map a plugin size string to a Venice aspect ratio.
+        """Aspect ratio to send, or None to let Venice infer it.
 
-        Falls back to "auto", which tells Venice to infer the ratio from the
-        input image.
+        Venice infers the ratio from the input image when told nothing, and
+        the image the plugin sends is already padded to the target shape - so
+        omitting this is both safe and correct. It is only sent when the
+        catalogue confirms the model accepts the value, because the supported
+        list differs per model and several do not accept "auto" at all.
         """
-        return self.ASPECT_RATIOS.get(size, "auto")
+        ratio = self.ASPECT_RATIOS.get(size)
+        if not ratio:
+            return None
+
+        supported = self.settings.get("edit_aspect_ratios")
+        if not supported or ratio not in supported:
+            return None
+
+        return ratio
 
     def _json_request(self, url, data, api_key):
         json_data = json.dumps(data).encode("utf-8")
@@ -567,10 +604,17 @@ class VeniceProvider(Provider):
         """
         data = {
             "prompt": prompt,
-            "aspect_ratio": self._aspect_ratio(size),
-            "resolution": self._resolution(),
             "output_format": "png",
         }
+
+        # Both are model-specific and omitted unless known to be accepted
+        aspect_ratio = self._aspect_ratio(size)
+        if aspect_ratio:
+            data["aspect_ratio"] = aspect_ratio
+
+        resolution = self._resolution()
+        if resolution:
+            data["resolution"] = resolution
 
         if isinstance(image_bytes, list):
             # Layer composite - first image is the base, the rest are layers
@@ -711,6 +755,7 @@ class VeniceProvider(Provider):
                     "id": model_id,
                     "max_input_images": max_inputs,
                     "aspect_ratios": constraints.get("aspectRatios") or [],
+                    "resolutions": constraints.get("resolutions") or [],
                     "prompt_limit": constraints.get("promptCharacterLimit"),
                 }
             )

@@ -410,18 +410,31 @@ def test_venice_aspect_ratio_mapping():
     """Test that plugin shapes map onto Venice aspect ratios."""
     print("\n=== Testing Venice Aspect Ratio Mapping ===")
 
-    provider = VeniceProvider({})
-
-    # Every Venice edit model supports these three
-    assert provider._aspect_ratio("1024x1024") == "1:1"
-    assert provider._aspect_ratio("1536x1024") == "3:2"
-    assert provider._aspect_ratio("1024x1536") == "2:3"
+    # With the model's supported list known, the three plugin shapes map on
+    known = VeniceProvider(
+        {"venice": {"edit_aspect_ratios": ["1:1", "3:2", "2:3", "16:9"]}}
+    )
+    assert known._aspect_ratio("1024x1024") == "1:1"
+    assert known._aspect_ratio("1536x1024") == "3:2"
+    assert known._aspect_ratio("1024x1536") == "2:3"
     print("✓ The three plugin shapes map to 1:1, 3:2 and 2:3")
 
-    # Anything else lets Venice infer the ratio from the input image
-    assert provider._aspect_ratio("800x600") == "auto"
-    assert provider._aspect_ratio(None) == "auto"
-    print("✓ Unknown sizes fall back to auto")
+    # Unknown sizes have no mapping, so nothing is sent
+    assert known._aspect_ratio("800x600") is None
+    assert known._aspect_ratio(None) is None
+    print("✓ Unmapped sizes send no aspect ratio")
+
+    # Without catalogue data nothing is sent - Venice infers the ratio from
+    # the input image, which the plugin has already padded to the target shape
+    assert VeniceProvider({})._aspect_ratio("1536x1024") is None
+    print("✓ Nothing is sent when the model's list is unknown")
+
+    # A model whose list lacks the value gets nothing rather than a 400.
+    # qwen-image-2-edit really does omit "auto", and three models omit it.
+    narrow = VeniceProvider({"venice": {"edit_aspect_ratios": ["1:1", "9:16"]}})
+    assert narrow._aspect_ratio("1536x1024") is None
+    assert narrow._aspect_ratio("1024x1024") == "1:1"
+    print("✓ A ratio outside the model's list is dropped")
 
 
 def test_venice_edit_request():
@@ -429,7 +442,14 @@ def test_venice_edit_request():
     print("\n=== Testing Venice Edit Request ===")
 
     provider = VeniceProvider(
-        {"venice": {"edit_model": "gpt-image-2-edit", "resolution": "2K"}}
+        {
+            "venice": {
+                "edit_model": "gpt-image-2-edit",
+                "resolution": "2K",
+                "edit_resolutions": ["1K", "2K", "4K"],
+                "edit_aspect_ratios": ["1:1", "3:2", "2:3"],
+            }
+        }
     )
     req = provider.build_edit_request(
         PNG_BYTES, MASK_BYTES, "blue sky", "1536x1024", "vn-key"
@@ -467,11 +487,97 @@ def test_venice_edit_request():
     print("✓ Works with no mask at all")
 
 
+def test_venice_sizing_is_model_specific():
+    """Test that unsupported sizing parameters are never sent.
+
+    13 of Venice's 24 edit models have no resolution tiers at all - including
+    the default firered-image-edit - and sending one is a 400. Three models
+    reject "auto" as an aspect ratio. Both are omitted unless the catalogue
+    says the model takes them.
+    """
+    print("\n=== Testing Venice Model-Specific Sizing ===")
+
+    # Default config: nothing known about the model, so nothing is sent
+    default = VeniceProvider({"venice": {"edit_model": "firered-image-edit"}})
+    body = json.loads(
+        default.build_edit_request(PNG_BYTES, None, "an eagle", "1536x1024", "k").data
+    )
+    assert "resolution" not in body
+    assert "aspect_ratio" not in body
+    assert body["model"] == "firered-image-edit"
+    assert body["prompt"] == "an eagle"
+    print("✓ Nothing model-specific is sent without catalogue data")
+
+    # A tier the model does not support is dropped rather than sent
+    unsupported = VeniceProvider(
+        {
+            "venice": {
+                "edit_model": "firered-image-edit",
+                "resolution": "2K",
+                "edit_resolutions": [],
+            }
+        }
+    )
+    body = json.loads(
+        unsupported.build_edit_request(PNG_BYTES, None, "x", "1024x1024", "k").data
+    )
+    assert "resolution" not in body
+    print("✓ A model with no tiers never receives a resolution")
+
+    known = VeniceProvider(
+        {
+            "venice": {
+                "edit_model": "grok-imagine-edit",
+                "resolution": "4K",
+                "edit_resolutions": ["1K", "2K"],
+            }
+        }
+    )
+    body = json.loads(
+        known.build_edit_request(PNG_BYTES, None, "x", "1024x1024", "k").data
+    )
+    assert "resolution" not in body
+    print("✓ A tier outside the model's list is dropped")
+
+    # An aspect ratio is sent only when the model lists it
+    ratios = VeniceProvider(
+        {
+            "venice": {
+                "edit_model": "qwen-image-2-edit",
+                "edit_aspect_ratios": ["1:1", "3:2", "2:3"],
+            }
+        }
+    )
+    body = json.loads(
+        ratios.build_edit_request(PNG_BYTES, None, "x", "1536x1024", "k").data
+    )
+    assert body["aspect_ratio"] == "3:2"
+    print("✓ A supported aspect ratio is sent")
+
+    # Multi-edit follows the same rule
+    multi = json.loads(
+        default.build_edit_request([b"A", b"B"], None, "x", "1536x1024", "k").data
+    )
+    assert "aspect_ratio" not in multi
+    assert "resolution" not in multi
+    assert multi["modelId"] == "firered-image-edit"
+    print("✓ Multi-edit omits them too")
+
+
 def test_venice_multi_edit_request():
     """Test layer composite - Venice's /image/multi-edit."""
     print("\n=== Testing Venice Multi-Edit Request ===")
 
-    provider = VeniceProvider({"venice": {"edit_model": "seedream-v4-edit"}})
+    provider = VeniceProvider(
+        {
+            "venice": {
+                "edit_model": "seedream-v4-edit",
+                "resolution": "1K",
+                "edit_resolutions": ["1K", "2K"],
+                "edit_aspect_ratios": ["1:1", "3:2", "2:3"],
+            }
+        }
+    )
     layers = [b"\x89PNG-base", b"\x89PNG-upper-1", b"\x89PNG-upper-2"]
 
     req = provider.build_edit_request(layers, None, "blend these", "1024x1536", "k")
@@ -612,6 +718,7 @@ def test_venice_model_discovery():
     assert len(models) == 4  # the entry with no id is skipped
     assert by_id["firered-image-edit"]["max_input_images"] == 6
     assert by_id["firered-image-edit"]["aspect_ratios"] == ["1:1", "3:2"]
+    assert by_id["firered-image-edit"]["resolutions"] == []
     assert by_id["firered-image-edit"]["prompt_limit"] == 1500
     print("✓ Limits are read from model_spec.constraints")
 
@@ -694,6 +801,7 @@ def run_all_tests():
         test_venice_generation_request()
         test_venice_aspect_ratio_mapping()
         test_venice_edit_request()
+        test_venice_sizing_is_model_specific()
         test_venice_multi_edit_request()
         test_venice_edit_response_parsing()
         test_venice_http_errors()
