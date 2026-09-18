@@ -40,7 +40,12 @@ from coordinate_utils import (
 )
 
 # Import provider abstraction (pure Python, no GIMP dependencies)
-from ai_providers import get_provider, PROVIDERS, ProviderError
+from ai_providers import (
+    describe_selection_position,
+    get_provider,
+    PROVIDERS,
+    ProviderError,
+)
 
 
 class GimpAIPlugin(Gimp.PlugIn):
@@ -3742,6 +3747,19 @@ class GimpAIPlugin(Gimp.PlugIn):
                     f"🎭 {provider.label} has no mask API - applying selection locally",
                 )
 
+                # Name the region in the prompt. Without it the model composes
+                # for the whole frame and the layer mask clips whatever falls
+                # outside the selection.
+                region = describe_selection_position(
+                    context_info.get("selection_bounds"),
+                    image.get_width(),
+                    image.get_height(),
+                )
+                hinted_prompt = provider.add_region_hint(prompt, region)
+                if hinted_prompt != prompt:
+                    print(f"DEBUG: Prompt with region hint: {hinted_prompt}")
+                    prompt = hinted_prompt
+
             self._update_progress(progress_label, "🚀 Starting AI processing...")
 
             # Determine the optimal size for the provider
@@ -3946,6 +3964,16 @@ class GimpAIPlugin(Gimp.PlugIn):
                             progress_label,
                             f"🎭 {provider.label} has no mask API - applying selection locally",
                         )
+
+                        region = describe_selection_position(
+                            context_info.get("selection_bounds"),
+                            img_width,
+                            img_height,
+                        )
+                        hinted_prompt = provider.add_region_hint(prompt, region)
+                        if hinted_prompt != prompt:
+                            print(f"DEBUG: Prompt with region hint: {hinted_prompt}")
+                            prompt = hinted_prompt
                 else:
                     # ERROR: User checked the mask box but there's no selection
                     print("DEBUG: ERROR - Use mask checked but no selection found")

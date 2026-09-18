@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ai_providers import (
     DEFAULT_PROVIDER,
+    describe_selection_position,
     OpenAIProvider,
     ProviderError,
     VeniceProvider,
@@ -625,6 +626,55 @@ def test_venice_model_discovery():
     print("✓ Models declaring no limit report None")
 
 
+def test_region_hint():
+    """Test naming the edit region for providers that take no mask."""
+    print("\n=== Testing Region Hint ===")
+
+    # 3x3 grid, by the centre of the selection
+    assert describe_selection_position((400, 400, 600, 600), 1000, 1000) == "the centre"
+    assert describe_selection_position((0, 0, 200, 200), 1000, 1000) == "the top left"
+    assert (
+        describe_selection_position((800, 800, 1000, 1000), 1000, 1000)
+        == "the bottom right"
+    )
+    assert describe_selection_position((400, 0, 600, 200), 1000, 1000) == "the top"
+    assert describe_selection_position((0, 400, 200, 600), 1000, 1000) == "the left"
+    print("✓ Selections map onto a 3x3 grid")
+
+    # A near-full-frame selection has no meaningful position
+    assert describe_selection_position((0, 0, 1000, 1000), 1000, 1000) is None
+    assert describe_selection_position((10, 10, 990, 990), 1000, 1000) is None
+    print("✓ Full-frame selections report no region")
+
+    # Degenerate input must not raise
+    assert describe_selection_position(None, 1000, 1000) is None
+    assert describe_selection_position((0, 0, 0, 0), 1000, 1000) is None
+    assert describe_selection_position((0, 0, 100, 100), 0, 0) is None
+    print("✓ Degenerate bounds return None")
+
+    # Venice names the region; OpenAI leaves the prompt alone
+    venice = VeniceProvider({})
+    assert (
+        venice.add_region_hint("add a dwarf sitting", "the centre")
+        == "add a dwarf sitting, in the centre of the image"
+    )
+    assert venice.add_region_hint("a bench.", "the top") == "a bench, in the top of the image"
+    print("✓ Venice appends the region to the prompt")
+
+    assert (
+        OpenAIProvider({}).add_region_hint("add a dwarf sitting", "the centre")
+        == "add a dwarf sitting"
+    )
+    print("✓ OpenAI prompts are untouched")
+
+    # No region, empty prompt, or a prompt that already says it
+    assert venice.add_region_hint("a bench", None) == "a bench"
+    assert venice.add_region_hint("", "the centre") == ""
+    already = "a bench in the centre"
+    assert venice.add_region_hint(already, "the centre") == already
+    print("✓ No hint when there is nothing to add")
+
+
 def run_all_tests():
     """Run all provider tests."""
     print("Provider Abstraction Test Suite")
@@ -648,6 +698,7 @@ def run_all_tests():
         test_venice_edit_response_parsing()
         test_venice_http_errors()
         test_venice_model_discovery()
+        test_region_hint()
 
         print("\n" + "=" * 60)
         print("🎉 ALL PROVIDER TESTS PASSED!")

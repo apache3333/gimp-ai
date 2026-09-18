@@ -103,6 +103,60 @@ def parse_b64_json_response(body):
     return base64.b64decode(result_data["b64_json"])
 
 
+# Names for the nine cells of a 3x3 grid, indexed [row][column]
+_REGION_NAMES = (
+    ("the top left", "the top", "the top right"),
+    ("the left", "the centre", "the right"),
+    ("the bottom left", "the bottom", "the bottom right"),
+)
+
+# A selection covering this much of the image is treated as a full-frame edit
+_FULL_FRAME_COVERAGE = 0.8
+
+
+def describe_selection_position(sel_bounds, img_width, img_height):
+    """Describe where a selection sits, as a phrase like "the centre".
+
+    Providers with no mask parameter cannot be told which region to edit, so
+    the region has to be named in the prompt instead. Without it the model
+    composes for the whole frame and the layer mask clips whatever falls
+    outside the selection - a figure asked for in a small selection comes back
+    cut off at its edge.
+
+    Args:
+        sel_bounds: (x1, y1, x2, y2) selection bounds
+        img_width: Image width in pixels
+        img_height: Image height in pixels
+
+    Returns:
+        str or None: A region name, or None when the selection covers most of
+            the image and naming a region would be misleading
+    """
+    if not sel_bounds or len(sel_bounds) != 4:
+        return None
+    if not img_width or not img_height:
+        return None
+
+    x1, y1, x2, y2 = sel_bounds
+    width = abs(x2 - x1)
+    height = abs(y2 - y1)
+    if width <= 0 or height <= 0:
+        return None
+
+    # A near-full-frame selection has no meaningful position
+    coverage = (width * height) / float(img_width * img_height)
+    if coverage >= _FULL_FRAME_COVERAGE:
+        return None
+
+    centre_x = (min(x1, x2) + width / 2.0) / float(img_width)
+    centre_y = (min(y1, y2) + height / 2.0) / float(img_height)
+
+    column = min(int(centre_x * 3), 2)
+    row = min(int(centre_y * 3), 2)
+
+    return _REGION_NAMES[row][column]
+
+
 class Provider:
     """Base class for AI image providers.
 
@@ -235,6 +289,14 @@ class Provider:
     def format_http_error(self, code, body):
         """Format an HTTP error for display to the user."""
         return f"{self.label} API error {code}: {body[:200]}"
+
+    def add_region_hint(self, prompt, region):
+        """Name the edit region in the prompt, for providers with no mask.
+
+        Providers that accept a mask ignore this and return the prompt as the
+        user typed it.
+        """
+        return prompt
 
     # Optional: model discovery
 
@@ -524,6 +586,22 @@ class VeniceProvider(Provider):
             url = self.EDIT_URL
 
         return self._json_request(url, data, api_key)
+
+    def add_region_hint(self, prompt, region):
+        """Append the edit region, since Venice cannot be sent a mask.
+
+        "add a dwarf sitting" with a centre selection becomes "add a dwarf
+        sitting, in the centre of the image". Without it the model composes for
+        the whole frame and the layer mask clips whatever falls outside the
+        selection.
+        """
+        if not region or not prompt or not prompt.strip():
+            return prompt
+
+        if region in prompt.lower():
+            return prompt
+
+        return f"{prompt.rstrip().rstrip(',.')}, in {region} of the image"
 
     def parse_edit_response(self, body):
         """Venice edit endpoints answer with raw image bytes on success."""

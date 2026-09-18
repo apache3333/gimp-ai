@@ -97,6 +97,11 @@ OpenAI. Editing has two differences worth knowing before you rely on it:
   told *which* part of the image to change. The plugin still masks the result to your
   selection with a GIMP layer mask, so you only see changes inside your selection - but
   the model may have redrawn more of the surrounding area than OpenAI would.
+- **Your prompt gets the region appended.** Because Venice composes for the whole frame,
+  a subject that lands outside your selection is clipped by the layer mask - a figure can
+  come back cut in half. So `add a dwarf sitting` is sent as
+  `add a dwarf sitting, in the centre of the image`. **Give the subject room**: if the
+  selection is much smaller than what you asked for, widen it or use Full Image mode.
 - **Sizing is approximate.** Venice sizes output by aspect ratio and a resolution tier
   rather than exact pixels, so results are scaled to fit before being composited.
 

@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     region to change. The selection is still applied as a GIMP layer mask afterwards, so
     the visible result stays inside your selection. Venice also marks its edit endpoints
     experimental.
+  - Because of that, Venice edit prompts have the selection's region appended
+    (`add a dwarf sitting` becomes `add a dwarf sitting, in the centre of the image`).
+    Without the hint the model composes for the whole frame and the layer mask clips
+    whatever falls outside the selection.
 - **New required file**: `ai_providers.py` must be installed alongside `gimp-ai-plugin.py`
   and `coordinate_utils.py`. The automated installer and release package handle this; manual
   installs now copy three files instead of two.
